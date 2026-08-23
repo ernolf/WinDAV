@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 ernolf
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+version: 2
+
+updates:
+  # Package versions live in Directory.Packages.props; the lock files are updated with
+  # them, which is what keeps the locked-mode restore in CI honest.
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+
+  # Without this the pinned action SHAs would never move, and a pin nobody updates is
+  # a dependency frozen at the day it was written.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore

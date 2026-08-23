@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: 2026 ernolf
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push makes a running check pointless, so it is cancelled. Runs on main are
+# left alone: the default branch keeps a complete record.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Build, test and check formatting
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # MinVer reads the version off the tags, and a shallow clone carries none.
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Restore
+        # Locked mode fails on anything the lock files do not already pin, so an
+        # unreviewed version bump breaks here instead of drifting in unnoticed.
+        run: dotnet restore WinDAV.slnx --locked-mode
+
+      - name: Build
+        run: dotnet build WinDAV.slnx --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test --solution WinDAV.slnx --no-build --configuration Release
+
+      - name: Check formatting
+        # Kept apart from the build so the inner loop does not fight whitespace while
+        # nothing sloppy still reaches the default branch.
+        run: dotnet format WinDAV.slnx --verify-no-changes --no-restore
