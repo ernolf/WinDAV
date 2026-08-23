@@ -1,0 +1,19 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 ernolf
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Add the DCO sign-off unless the message already carries one. Visual Studio commits
+# without --signoff and exposes no setting for it, so the hook is the one place that
+# catches every commit no matter where it was made.
+
+set -e
+
+# Leave merge and squash messages alone: those are assembled by git, not authored here.
+case "$2" in
+merge | squash) exit 0 ;;
+esac
+
+# Same identity git commit -s would use, and it fails loudly if none is configured.
+ident=$(git var GIT_AUTHOR_IDENT | sed 's/^\(.*>\).*$/\1/')
+
+git interpret-trailers --if-exists doNothing --trailer "Signed-off-by: $ident" --in-place "$1"
