@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The plain RFC 4918 provider. It exists to keep the seam honest: an abstraction
+       with one implementation is not an abstraction. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\WinDav.Abstractions\WinDav.Abstractions.csproj" />
+    <ProjectReference Include="..\WinDav.Dav\WinDav.Dav.csproj" />
+  </ItemGroup>
+
+</Project>

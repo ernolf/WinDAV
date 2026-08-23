@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The provider seam. Deliberately without any dependency: whatever ends up here
+       is what a provider has to satisfy, and nothing else may leak into it. -->
+
+</Project>

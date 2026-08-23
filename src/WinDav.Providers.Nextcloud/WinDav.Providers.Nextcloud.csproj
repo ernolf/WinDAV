@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Everything Nextcloud: chunked upload, OCS, Login Flow v2, notify_push. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\WinDav.Abstractions\WinDav.Abstractions.csproj" />
+    <ProjectReference Include="..\WinDav.Dav\WinDav.Dav.csproj" />
+  </ItemGroup>
+
+</Project>

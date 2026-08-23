@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- The command users type. Derived so the executable is renamed with the product. -->
+    <AssemblyName>$(ProductSlug)</AssemblyName>
+    <RootNamespace>WinDav.Cli</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WinDav.Core\WinDav.Core.csproj" />
+    <ProjectReference Include="..\WinDav.Fs\WinDav.Fs.csproj" />
+    <ProjectReference Include="..\WinDav.Providers.Nextcloud\WinDav.Providers.Nextcloud.csproj" />
+    <ProjectReference Include="..\WinDav.Providers.WebDav\WinDav.Providers.WebDav.csproj" />
+  </ItemGroup>
+
+</Project>

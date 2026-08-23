@@ -1,0 +1,19 @@
+<Project>
+
+  <!-- Central Package Management: every version in the repository is declared here.
+       A .csproj names a package, never a version. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup Label="Build">
+    <PackageVersion Include="MinVer" Version="7.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Test">
+    <PackageVersion Include="xunit.v3" Version="4.0.0" />
+    <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.10.0" />
+  </ItemGroup>
+
+</Project>

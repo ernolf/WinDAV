@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The WinFsp host. First project that is allowed to be Windows-only. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WinDav.Abstractions\WinDav.Abstractions.csproj" />
+    <ProjectReference Include="..\WinDav.Core\WinDav.Core.csproj" />
+  </ItemGroup>
+
+</Project>

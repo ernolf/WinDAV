@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- RFC 4918 on the wire: methods, properties, the If header, locking. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\WinDav.Abstractions\WinDav.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,88 @@
+<Project>
+
+  <!-- == Product identity: the only place the name is written == -->
+  <!-- Everything user-visible derives from these four values. Change them here and
+       nowhere else. Namespaces deliberately do NOT derive from them: they are spelled
+       out in each project so a rename stays a deliberate refactor instead of a silent
+       one. -->
+  <PropertyGroup>
+    <ProductName>WinDAV</ProductName>
+    <ProductSlug>windav</ProductSlug>
+    <ProductVendor>ernolf</ProductVendor>
+    <ProductRepository>https://github.com/ernolf/WinDAV</ProductRepository>
+  </PropertyGroup>
+
+  <!-- == Derived metadata == -->
+  <PropertyGroup>
+    <Product>$(ProductName)</Product>
+    <Company>$(ProductVendor)</Company>
+    <Authors>$(ProductVendor)</Authors>
+    <Copyright>Copyright (C) 2026 $(ProductVendor)</Copyright>
+    <RepositoryUrl>$(ProductRepository)</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>$(ProductRepository)</PackageProjectUrl>
+    <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <!-- == Language and platform ==
+       net10.0 without a platform suffix is the default on purpose: the protocol and
+       provider layers must not reach for Windows APIs. Only the projects that host the
+       file system or the executable opt into net10.0-windows. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <!-- == Quality gates ==
+       Correctness fails the build. Formatting is a separate gate (dotnet format in CI),
+       so the inner loop does not fight whitespace while nothing sloppy still lands. -->
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- == Reproducible builds == -->
+  <PropertyGroup>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+
+  <!-- == Dependency hygiene ==
+       Lock files make a restore reproducible; CI restores in locked mode so an
+       unreviewed version bump fails there instead of drifting in silently. -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+  </PropertyGroup>
+
+  <!-- == Build output ==
+       One artifacts/ tree instead of bin/ and obj/ scattered through the source. -->
+  <PropertyGroup>
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+    <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
+  </PropertyGroup>
+
+  <!-- == Versioning ==
+       Driven by git tags (vMAJOR.MINOR.PATCH). An untagged working tree builds as a
+       pre-release of the next patch, so no version literal exists anywhere. -->
+  <PropertyGroup>
+    <MinVerTagPrefix>v</MinVerTagPrefix>
+    <MinVerMinimumMajorMinor>0.1</MinVerMinimumMajorMinor>
+    <MinVerDefaultPreReleaseIdentifiers>alpha.0</MinVerDefaultPreReleaseIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MinVer" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

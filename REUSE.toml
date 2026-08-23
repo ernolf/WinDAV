@@ -1,0 +1,26 @@
+version = 1
+SPDX-PackageName = "WinDAV"
+SPDX-PackageDownloadLocation = "https://github.com/ernolf/WinDAV"
+
+# Source files carry their own SPDX header. Listed here are the files whose format
+# has no place for one, or where a header would be pure clutter.
+
+[[annotations]]
+path = [
+  ".editorconfig",
+  ".gitattributes",
+  ".gitignore",
+  "LICENSE",
+  "global.json",
+  "nuget.config",
+  "Directory.Build.props",
+  "Directory.Packages.props",
+  "REUSE.toml",
+  "WinDAV.slnx",
+  "**/*.csproj",
+  "**/packages.lock.json",
+  "**/*.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 ernolf"
+SPDX-License-Identifier = "GPL-3.0-or-later"

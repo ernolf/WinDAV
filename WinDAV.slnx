@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/WinDav.Abstractions/WinDav.Abstractions.csproj" />
+    <Project Path="src/WinDav.Cli/WinDav.Cli.csproj" />
+    <Project Path="src/WinDav.Core/WinDav.Core.csproj" />
+    <Project Path="src/WinDav.Dav/WinDav.Dav.csproj" />
+    <Project Path="src/WinDav.Fs/WinDav.Fs.csproj" />
+    <Project Path="src/WinDav.Providers.Nextcloud/WinDav.Providers.Nextcloud.csproj" />
+    <Project Path="src/WinDav.Providers.WebDav/WinDav.Providers.WebDav.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/WinDav.Dav.Tests/WinDav.Dav.Tests.csproj" />
+  </Folder>
+</Solution>

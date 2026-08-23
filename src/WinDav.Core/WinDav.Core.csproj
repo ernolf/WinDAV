@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Mounts, cache, configuration. Talks to providers through the seam only, which is
+       why it does not reference WinDav.Dav. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\WinDav.Abstractions\WinDav.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>
