@@ -55,10 +55,8 @@ public sealed class DavResourceTests
     }
 
     [Fact]
-    public void FromResponseReadsTheContentLength()
-    {
+    public void FromResponseReadsTheContentLength() =>
         Assert.Equal(17L, Read(Listing, 1).ContentLength);
-    }
 
     [Fact]
     public void FromResponseIgnoresPropertiesReportedUnderAnotherStatus()
@@ -79,16 +77,12 @@ public sealed class DavResourceTests
     }
 
     [Fact]
-    public void FromResponseKeepsTheQuotesOfTheETag()
-    {
+    public void FromResponseKeepsTheQuotesOfTheETag() =>
         Assert.Equal("\"5f2a1b3c4d5e6\"", Read(Listing, 1).ETag);
-    }
 
     [Fact]
-    public void FromResponseKeepsTheParametersOfTheContentType()
-    {
+    public void FromResponseKeepsTheParametersOfTheContentType() =>
         Assert.Equal("text/plain; charset=utf-8", Read(Listing, 1).ContentType);
-    }
 
     [Fact]
     public void FromResponseReportsAValueItCannotReadAsAbsent()
@@ -124,8 +118,6 @@ public sealed class DavResourceTests
         Assert.Equal("/remote.php/dav/files/ernolf/a%20note.txt", resource.Href);
     }
 
-    private static DavResource Read(string listing, int index)
-    {
-        return DavResource.FromResponse(MultiStatusParser.Parse(XDocument.Parse(listing))[index]);
-    }
+    private static DavResource Read(string listing, int index) =>
+        DavResource.FromResponse(MultiStatusParser.Parse(XDocument.Parse(listing))[index]);
 }

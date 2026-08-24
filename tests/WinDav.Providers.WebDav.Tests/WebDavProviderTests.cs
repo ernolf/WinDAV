@@ -377,7 +377,7 @@ public sealed class WebDavProviderTests
     {
         using StreamReader reader = new(stream, Encoding.UTF8, leaveOpen: true);
 
-        return await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
+        return await reader.ReadToEndAsync(TestContext.Current.CancellationToken).ConfigureAwait(false);
     }
 
     private static HttpResponseMessage Body(HttpStatusCode status, string body) =>
