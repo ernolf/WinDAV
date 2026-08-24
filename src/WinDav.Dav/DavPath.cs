@@ -3,25 +3,34 @@
 
 using WinDav.Abstractions;
 
-namespace WinDav.Providers.WebDav;
+namespace WinDav.Dav;
 
 /// <summary>
-/// Turns the paths of the seam into URIs and back. This is the only place in the provider
-/// where escaping happens, in either direction.
+/// Turns the paths of the seam into URIs and back. This is the only place where escaping
+/// happens, in either direction.
 /// </summary>
-internal static class WebDavPath
+public static class DavPath
 {
     /// <summary>
     /// Makes sure a base URI names a collection, because a relative reference is resolved
     /// against the last slash and would otherwise replace the last segment.
     /// </summary>
-    internal static Uri AsCollection(Uri uri) =>
-        uri.AbsoluteUri.EndsWith('/') ? uri : new Uri(uri.AbsoluteUri + "/", UriKind.Absolute);
+    /// <param name="uri">The URI to read as a collection.</param>
+    /// <returns>The same URI, ending in a slash.</returns>
+    public static Uri AsCollection(Uri uri)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+
+        return uri.AbsoluteUri.EndsWith('/') ? uri : new Uri(uri.AbsoluteUri + "/", UriKind.Absolute);
+    }
 
     /// <summary>
     /// Brings a path into the form the seam prescribes: leading slash, no trailing one.
     /// </summary>
-    internal static string Normalise(string path)
+    /// <param name="path">The path to bring into form.</param>
+    /// <returns>The normalised path, which for the root is <c>"/"</c>.</returns>
+    /// <exception cref="ArgumentException">The path is empty or does not start with a slash.</exception>
+    public static string Normalise(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
 
@@ -38,13 +47,19 @@ internal static class WebDavPath
     /// <summary>
     /// Names a resource on the server.
     /// </summary>
-    internal static Uri ToUri(Uri baseUri, string path) =>
+    /// <param name="baseUri">The collection the seam's root stands for.</param>
+    /// <param name="path">The path of the resource.</param>
+    /// <returns>The absolute URI of that resource.</returns>
+    public static Uri ToUri(Uri baseUri, string path) =>
         new(baseUri, Relative(path));
 
     /// <summary>
     /// Names a collection on the server, with the trailing slash MKCOL wants.
     /// </summary>
-    internal static Uri ToCollectionUri(Uri baseUri, string path)
+    /// <param name="baseUri">The collection the seam's root stands for.</param>
+    /// <param name="path">The path of the collection.</param>
+    /// <returns>The absolute URI of that collection, ending in a slash.</returns>
+    public static Uri ToCollectionUri(Uri baseUri, string path)
     {
         string relative = Relative(path);
 
@@ -54,12 +69,17 @@ internal static class WebDavPath
     /// <summary>
     /// Reads an href from a multistatus back into a path of the seam.
     /// </summary>
+    /// <param name="baseUri">The collection the seam's root stands for.</param>
+    /// <param name="href">The href the server wrote.</param>
+    /// <returns>The path that href stands for.</returns>
     /// <exception cref="ProviderException">
     /// <see cref="ProviderError.Protocol"/> when the href is not a URI, or names something
     /// outside the base. Either means the answer cannot be trusted to describe this account.
     /// </exception>
-    internal static string FromHref(Uri baseUri, string href)
+    public static string FromHref(Uri baseUri, string href)
     {
+        ArgumentNullException.ThrowIfNull(baseUri);
+
         // An href may be an absolute URI or an absolute path; both resolve against the base.
         if (!Uri.TryCreate(baseUri, href, out Uri? absolute))
         {
