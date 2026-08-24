@@ -135,7 +135,10 @@ public sealed class DavClient
     /// </summary>
     /// <param name="uri">The resource to fetch.</param>
     /// <param name="offset">The first byte to fetch, counted from zero.</param>
-    /// <param name="count">How many bytes to fetch.</param>
+    /// <param name="count">
+    /// How many bytes to fetch, or <see langword="null"/> for everything from
+    /// <paramref name="offset"/> on.
+    /// </param>
     /// <param name="cancellationToken">Cancels the request.</param>
     /// <returns>
     /// The body and the headers describing it. A server may answer with the whole resource
@@ -145,15 +148,21 @@ public sealed class DavClient
     public Task<DavContent> GetRangeAsync(
         Uri uri,
         long offset,
-        long count,
+        long? count = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+
+        if (count is not null)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count.Value);
+        }
 
         // A byte range names first and last byte, both inclusive, which is why the last one
-        // is one below offset + count.
-        return SendGetAsync(uri, new RangeHeaderValue(offset, offset + count - 1), cancellationToken);
+        // is one below offset + count. Left open it asks for the rest of the resource.
+        long? last = count is null ? null : offset + count.Value - 1;
+
+        return SendGetAsync(uri, new RangeHeaderValue(offset, last), cancellationToken);
     }
 
     private async Task<DavContent> SendGetAsync(Uri uri, RangeHeaderValue? range, CancellationToken cancellationToken)
