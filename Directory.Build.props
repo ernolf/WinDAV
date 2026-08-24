@@ -8,7 +8,7 @@
   <PropertyGroup>
     <ProductName>WinDAV</ProductName>
     <ProductSlug>windav</ProductSlug>
-    <ProductVendor>ernolf</ProductVendor>
+    <ProductVendor>[ernolf] Raphael Gradenwitz</ProductVendor>
     <ProductRepository>https://github.com/ernolf/WinDAV</ProductRepository>
   </PropertyGroup>
 
