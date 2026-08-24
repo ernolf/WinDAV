@@ -2,14 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Xml.Linq;
 
 namespace WinDav.Dav;
 
 /// <summary>
-/// Sends the requests of RFC 4918 over an <see cref="HttpClient"/> and hands back what
-/// the server answered, already read into <see cref="DavResource"/> values.
+/// Sends the requests a WebDAV server understands over an <see cref="HttpClient"/> and
+/// hands back what it answered, already read into the types the rest of the program uses.
 /// </summary>
 /// <remarks>
 /// The client does not own the <see cref="HttpClient"/> it is handed. Base address,
@@ -96,6 +97,76 @@ public sealed class DavClient
         }
 
         return resources;
+    }
+
+    /// <summary>
+    /// Fetches a resource whole.
+    /// </summary>
+    /// <param name="uri">The resource to fetch.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>The body and the headers describing it. The caller disposes it.</returns>
+    /// <exception cref="HttpRequestException">The server did not answer with 200 or 206.</exception>
+    public Task<DavContent> GetAsync(Uri uri, CancellationToken cancellationToken = default) =>
+        SendGetAsync(uri, range: null, cancellationToken);
+
+    /// <summary>
+    /// Fetches a part of a resource.
+    /// </summary>
+    /// <param name="uri">The resource to fetch.</param>
+    /// <param name="offset">The first byte to fetch, counted from zero.</param>
+    /// <param name="count">How many bytes to fetch.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>
+    /// The body and the headers describing it. A server may answer with the whole resource
+    /// instead of the requested range; see <see cref="DavContent.IsPartial"/>.
+    /// </returns>
+    /// <exception cref="HttpRequestException">The server did not answer with 200 or 206.</exception>
+    public Task<DavContent> GetRangeAsync(
+        Uri uri,
+        long offset,
+        long count,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+
+        // A byte range names first and last byte, both inclusive, which is why the last one
+        // is one below offset + count.
+        return SendGetAsync(uri, new RangeHeaderValue(offset, offset + count - 1), cancellationToken);
+    }
+
+    private async Task<DavContent> SendGetAsync(Uri uri, RangeHeaderValue? range, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+
+        using HttpRequestMessage request = new(HttpMethod.Get, uri);
+        request.Headers.Range = range;
+
+        HttpResponseMessage response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+
+        try
+        {
+            // Serving a range is optional: RFC 9110 section 14.2 lets a server answer 200
+            // with the whole resource instead. That is not an error, so both statuses pass
+            // and the caller is told which one it got.
+            if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.PartialContent))
+            {
+                throw new HttpRequestException(
+                    $"GET {uri} expected 200 OK or 206 Partial Content but the server answered {(int)response.StatusCode}.",
+                    inner: null,
+                    statusCode: response.StatusCode);
+            }
+
+            return await DavContent.CreateAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The content owns the response once it exists. Until then this method does.
+            response.Dispose();
+            throw;
+        }
     }
 
     private static string BuildRequestBody(IEnumerable<XName>? properties)
