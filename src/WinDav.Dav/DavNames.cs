@@ -34,6 +34,12 @@ public static class DavNames
     /// <summary>The <c>DAV:status</c> element carrying an HTTP status line.</summary>
     public static readonly XName Status = Namespace + "status";
 
+    /// <summary>The <c>DAV:propfind</c> element, root of a PROPFIND request body.</summary>
+    public static readonly XName PropFind = Namespace + "propfind";
+
+    /// <summary>The <c>DAV:allprop</c> element, asking for every property the server has.</summary>
+    public static readonly XName AllProp = Namespace + "allprop";
+
     /// <summary>The <c>DAV:resourcetype</c> property, which tells a collection from a file.</summary>
     public static readonly XName ResourceType = Namespace + "resourcetype";
 
