@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -22,8 +23,28 @@ public sealed class DavClient
     // from the writer and could end up declaring an encoding the body is not sent in.
     private const string XmlDeclaration = "<?xml version=\"1.0\" encoding=\"utf-8\"?>";
 
-    // HttpMethod knows the methods of RFC 9110; PROPFIND is not among them.
+    // HttpMethod knows the methods of RFC 9110; these four are not among them.
     private static readonly HttpMethod s_propFind = new("PROPFIND");
+
+    private static readonly HttpMethod s_mkCol = new("MKCOL");
+
+    private static readonly HttpMethod s_copy = new("COPY");
+
+    private static readonly HttpMethod s_move = new("MOVE");
+
+    // 201 for a resource that did not exist, 204 for one that did, 200 for a server that
+    // answers with a body.
+    private static readonly HttpStatusCode[] s_putAccepts =
+        [HttpStatusCode.OK, HttpStatusCode.Created, HttpStatusCode.NoContent];
+
+    private static readonly HttpStatusCode[] s_mkColAccepts = [HttpStatusCode.Created];
+
+    private static readonly HttpStatusCode[] s_deleteAccepts =
+        [HttpStatusCode.OK, HttpStatusCode.Accepted, HttpStatusCode.NoContent];
+
+    // 201 when the destination was free, 204 when it was overwritten.
+    private static readonly HttpStatusCode[] s_relocationAccepts =
+        [HttpStatusCode.Created, HttpStatusCode.NoContent];
 
     private readonly HttpClient _httpClient;
 
@@ -167,6 +188,205 @@ public sealed class DavClient
             response.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Writes a resource, creating it or replacing what is there.
+    /// </summary>
+    /// <param name="uri">The resource to write.</param>
+    /// <param name="content">
+    /// The bytes to write. The stream is read to its end but not disposed; it belongs to
+    /// the caller.
+    /// </param>
+    /// <param name="contentType">The media type to declare, or <see langword="null"/>.</param>
+    /// <param name="ifMatch">
+    /// An entity tag the resource must still carry for the write to happen, in the form the
+    /// server wrote it. Without one the write overwrites whatever is there.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>
+    /// The entity tag of the written resource when the server stated one, otherwise
+    /// <see langword="null"/>. Servers are not obliged to answer with it.
+    /// </returns>
+    /// <exception cref="HttpRequestException">
+    /// The server refused the write. A precondition that failed shows as
+    /// <see cref="HttpStatusCode.PreconditionFailed"/>, which is how a lost update is told
+    /// apart from an error.
+    /// </exception>
+    public async Task<string?> PutAsync(
+        Uri uri,
+        Stream content,
+        string? contentType = null,
+        string? ifMatch = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+        ArgumentNullException.ThrowIfNull(content);
+
+        StreamPayload payload = new(content);
+        using HttpRequestMessage request = new(HttpMethod.Put, uri) { Content = payload };
+
+        if (contentType is not null)
+        {
+            payload.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
+        }
+
+        if (ifMatch is not null)
+        {
+            request.Headers.IfMatch.Add(EntityTagHeaderValue.Parse(ifMatch));
+        }
+
+        using HttpResponseMessage response = await SendExpectingAsync(request, s_putAccepts, cancellationToken)
+            .ConfigureAwait(false);
+
+        return response.Headers.ETag?.ToString();
+    }
+
+    /// <summary>
+    /// Creates a collection, that is a directory.
+    /// </summary>
+    /// <param name="uri">The collection to create, named with a trailing slash.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>A task that completes when the collection exists.</returns>
+    /// <exception cref="HttpRequestException">
+    /// The server refused. <see cref="HttpStatusCode.MethodNotAllowed"/> means something is
+    /// already there, <see cref="HttpStatusCode.Conflict"/> that the parent is missing.
+    /// </exception>
+    public async Task MkColAsync(Uri uri, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+
+        using HttpRequestMessage request = new(s_mkCol, uri);
+
+        using HttpResponseMessage response = await SendExpectingAsync(request, s_mkColAccepts, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Deletes a resource, with everything below it when it is a collection.
+    /// </summary>
+    /// <param name="uri">The resource to delete.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>A task that completes when the resource is gone.</returns>
+    /// <exception cref="HttpRequestException">
+    /// The server refused, or answered 207, which for a delete means that part of the tree
+    /// survived.
+    /// </exception>
+    public async Task DeleteAsync(Uri uri, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+
+        using HttpRequestMessage request = new(HttpMethod.Delete, uri);
+
+        // A delete that worked is 204. RFC 4918 section 9.6.1 lets a server answer 207 when
+        // it could not delete everything, so here 207 is a failure, not a listing.
+        using HttpResponseMessage response = await SendExpectingAsync(request, s_deleteAccepts, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Moves a resource, which is also how it is renamed.
+    /// </summary>
+    /// <param name="source">The resource to move.</param>
+    /// <param name="destination">Where it goes, as an absolute URI.</param>
+    /// <param name="overwrite">Whether an existing destination may be replaced.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>A task that completes when the resource has moved.</returns>
+    /// <exception cref="HttpRequestException">
+    /// The server refused. <see cref="HttpStatusCode.PreconditionFailed"/> means the
+    /// destination exists and <paramref name="overwrite"/> was <see langword="false"/>.
+    /// </exception>
+    public Task MoveAsync(
+        Uri source,
+        Uri destination,
+        bool overwrite = false,
+        CancellationToken cancellationToken = default) =>
+        SendRelocationAsync(s_move, source, destination, overwrite, depth: null, cancellationToken);
+
+    /// <summary>
+    /// Copies a resource.
+    /// </summary>
+    /// <param name="source">The resource to copy.</param>
+    /// <param name="destination">Where the copy goes, as an absolute URI.</param>
+    /// <param name="overwrite">Whether an existing destination may be replaced.</param>
+    /// <param name="depth">
+    /// <see cref="DavDepth.Infinity"/> copies a collection with everything in it,
+    /// <see cref="DavDepth.Zero"/> copies the collection itself and leaves it empty.
+    /// <see cref="DavDepth.One"/> is not a depth COPY accepts.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>A task that completes when the copy exists.</returns>
+    /// <exception cref="HttpRequestException">The server refused.</exception>
+    public Task CopyAsync(
+        Uri source,
+        Uri destination,
+        bool overwrite = false,
+        DavDepth depth = DavDepth.Infinity,
+        CancellationToken cancellationToken = default)
+    {
+        if (depth == DavDepth.One)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(depth),
+                "COPY takes 0 or infinity; RFC 4918 section 9.8.3 has no meaning for 1.");
+        }
+
+        return SendRelocationAsync(s_copy, source, destination, overwrite, depth, cancellationToken);
+    }
+
+    private async Task SendRelocationAsync(
+        HttpMethod method,
+        Uri source,
+        Uri destination,
+        bool overwrite,
+        DavDepth? depth,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(destination);
+
+        // RFC 4918 section 10.3 asks for an absolute URI, and a relative one would in any
+        // case be read against the server's idea of the base, not ours.
+        if (!destination.IsAbsoluteUri)
+        {
+            throw new ArgumentException("The destination has to be an absolute URI.", nameof(destination));
+        }
+
+        using HttpRequestMessage request = new(method, source);
+        request.Headers.Add("Destination", destination.AbsoluteUri);
+        request.Headers.Add("Overwrite", overwrite ? "T" : "F");
+
+        if (depth is not null)
+        {
+            request.Headers.Add("Depth", DepthHeader(depth.Value));
+        }
+
+        using HttpResponseMessage response = await SendExpectingAsync(request, s_relocationAccepts, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<HttpResponseMessage> SendExpectingAsync(
+        HttpRequestMessage request,
+        HttpStatusCode[] expected,
+        CancellationToken cancellationToken)
+    {
+        HttpResponseMessage response = await _httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (Array.IndexOf(expected, response.StatusCode) < 0)
+        {
+            string wanted = string.Join(" or ", expected.Select(status => ((int)status).ToString(CultureInfo.InvariantCulture)));
+            HttpStatusCode received = response.StatusCode;
+            response.Dispose();
+
+            throw new HttpRequestException(
+                $"{request.Method} {request.RequestUri} expected {wanted} but the server answered {(int)received}.",
+                inner: null,
+                statusCode: received);
+        }
+
+        return response;
     }
 
     private static string BuildRequestBody(IEnumerable<XName>? properties)

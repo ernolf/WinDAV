@@ -17,6 +17,10 @@ public sealed class DavClientTests
 
     private static readonly Uri s_file = new("https://cloud.example.com/remote.php/dav/files/ernolf/a%20note.txt");
 
+    private static readonly Uri s_otherFile = new("https://cloud.example.com/remote.php/dav/files/ernolf/renamed.txt");
+
+    private static readonly Uri s_otherFolder = new("https://cloud.example.com/remote.php/dav/files/ernolf/copy/");
+
     // Plain ASCII, so its length in characters is its length in bytes.
     private const string Note = "the quick brown fox";
 
@@ -224,6 +228,177 @@ public sealed class DavClientTests
         Assert.Equal(HttpStatusCode.NotFound, exception.StatusCode);
     }
 
+    [Fact]
+    public async Task PutAsyncWritesTheStreamAndReturnsTheNewETag()
+    {
+        HttpResponseMessage response = new(HttpStatusCode.Created);
+        response.Headers.ETag = new EntityTagHeaderValue("\"6a9f\"");
+
+        RecordingHandler handler = new(response);
+        using HttpClient httpClient = new(handler);
+        using MemoryStream content = new(Encoding.UTF8.GetBytes(Note));
+
+        string? etag = await new DavClient(httpClient)
+            .PutAsync(s_file, content, "text/plain", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("PUT", handler.Method);
+        Assert.Equal("text/plain", handler.ContentType);
+        Assert.Equal(Note, handler.Body);
+        Assert.Null(handler.IfMatch);
+        Assert.Equal("\"6a9f\"", etag);
+    }
+
+    [Fact]
+    public async Task PutAsyncLeavesTheStreamOpen()
+    {
+        // The stream is the caller's. StreamContent would have closed it with the request.
+        using HttpClient httpClient = new(new RecordingHandler(new HttpResponseMessage(HttpStatusCode.NoContent)));
+        using MemoryStream content = new(Encoding.UTF8.GetBytes(Note));
+
+        await new DavClient(httpClient).PutAsync(s_file, content, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(content.CanRead);
+    }
+
+    [Fact]
+    public async Task PutAsyncSendsTheEntityTagItWasGiven()
+    {
+        RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.NoContent));
+        using HttpClient httpClient = new(handler);
+        using MemoryStream content = new(Encoding.UTF8.GetBytes(Note));
+
+        string? etag = await new DavClient(httpClient)
+            .PutAsync(s_file, content, ifMatch: "\"6a9f\"", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("\"6a9f\"", handler.IfMatch);
+        Assert.Null(etag);
+    }
+
+    [Fact]
+    public async Task PutAsyncReportsAFailedPreconditionAsSuch()
+    {
+        // 412 is how a lost update announces itself: somebody else wrote first.
+        using HttpClient httpClient = new(new RecordingHandler(new HttpResponseMessage(HttpStatusCode.PreconditionFailed)));
+        using MemoryStream content = new(Encoding.UTF8.GetBytes(Note));
+
+        HttpRequestException exception = await Assert.ThrowsAsync<HttpRequestException>(
+            () => new DavClient(httpClient).PutAsync(
+                s_file,
+                content,
+                ifMatch: "\"6a9f\"",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.PreconditionFailed, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task MkColAsyncCreatesTheCollection()
+    {
+        RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.Created));
+        using HttpClient httpClient = new(handler);
+
+        await new DavClient(httpClient).MkColAsync(s_folder, TestContext.Current.CancellationToken);
+
+        Assert.Equal("MKCOL", handler.Method);
+    }
+
+    [Fact]
+    public async Task MkColAsyncRefusesAnAnswerThatIsNotCreated()
+    {
+        // 405 means something is already there. Reporting that as success would let a
+        // caller believe it owns a directory that somebody else made.
+        using HttpClient httpClient = new(new RecordingHandler(new HttpResponseMessage(HttpStatusCode.MethodNotAllowed)));
+
+        HttpRequestException exception = await Assert.ThrowsAsync<HttpRequestException>(
+            () => new DavClient(httpClient).MkColAsync(s_folder, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteAsyncSendsDelete()
+    {
+        RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.NoContent));
+        using HttpClient httpClient = new(handler);
+
+        await new DavClient(httpClient).DeleteAsync(s_file, TestContext.Current.CancellationToken);
+
+        Assert.Equal("DELETE", handler.Method);
+    }
+
+    [Fact]
+    public async Task DeleteAsyncTreatsMultiStatusAsAFailure()
+    {
+        // For a delete, 207 is the server saying that part of the tree is still there.
+        using HttpClient httpClient = new(new RecordingHandler(MultiStatus(Listing)));
+
+        HttpRequestException exception = await Assert.ThrowsAsync<HttpRequestException>(
+            () => new DavClient(httpClient).DeleteAsync(s_folder, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.MultiStatus, exception.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(false, "F")]
+    [InlineData(true, "T")]
+    public async Task MoveAsyncNamesTheDestinationAndWhetherItMayBeReplaced(bool overwrite, string expected)
+    {
+        RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.Created));
+        using HttpClient httpClient = new(handler);
+
+        await new DavClient(httpClient)
+            .MoveAsync(s_file, s_otherFile, overwrite, TestContext.Current.CancellationToken);
+
+        Assert.Equal("MOVE", handler.Method);
+        Assert.Equal(s_otherFile.AbsoluteUri, handler.Destination);
+        Assert.Equal(expected, handler.Overwrite);
+
+        // MOVE takes a tree whole; RFC 4918 section 9.9.2 knows no other depth for it.
+        Assert.Null(handler.Depth);
+    }
+
+    [Theory]
+    [InlineData(DavDepth.Infinity, "infinity")]
+    [InlineData(DavDepth.Zero, "0")]
+    public async Task CopyAsyncStatesHowDeepItCopies(DavDepth depth, string expected)
+    {
+        RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.Created));
+        using HttpClient httpClient = new(handler);
+
+        await new DavClient(httpClient)
+            .CopyAsync(s_folder, s_otherFolder, overwrite: false, depth, TestContext.Current.CancellationToken);
+
+        Assert.Equal("COPY", handler.Method);
+        Assert.Equal(expected, handler.Depth);
+    }
+
+    [Fact]
+    public async Task CopyAsyncRefusesADepthOfOne()
+    {
+        using HttpClient httpClient = new(new RecordingHandler(new HttpResponseMessage(HttpStatusCode.Created)));
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => new DavClient(httpClient).CopyAsync(
+                s_folder,
+                s_otherFolder,
+                overwrite: false,
+                DavDepth.One,
+                TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task MoveAsyncRefusesARelativeDestination()
+    {
+        using HttpClient httpClient = new(new RecordingHandler(new HttpResponseMessage(HttpStatusCode.Created)));
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => new DavClient(httpClient).MoveAsync(
+                s_file,
+                new Uri("a%20note.txt", UriKind.Relative),
+                overwrite: false,
+                TestContext.Current.CancellationToken));
+    }
+
     private static HttpResponseMessage Body(HttpStatusCode status, string body) =>
         new(status)
         {
@@ -253,6 +428,12 @@ public sealed class DavClientTests
 
         public string? Range { get; private set; }
 
+        public string? Destination { get; private set; }
+
+        public string? Overwrite { get; private set; }
+
+        public string? IfMatch { get; private set; }
+
         public string? ContentType { get; private set; }
 
         public string? Body { get; private set; }
@@ -260,8 +441,11 @@ public sealed class DavClientTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Method = request.Method.Method;
-            Depth = request.Headers.TryGetValues("Depth", out IEnumerable<string>? values) ? values.Single() : null;
+            Depth = Header(request, "Depth");
             Range = request.Headers.Range?.ToString();
+            Destination = Header(request, "Destination");
+            Overwrite = Header(request, "Overwrite");
+            IfMatch = request.Headers.IfMatch.Count == 0 ? null : request.Headers.IfMatch.ToString();
             ContentType = request.Content?.Headers.ContentType?.ToString();
 
             if (request.Content is not null)
@@ -271,6 +455,9 @@ public sealed class DavClientTests
 
             return _response;
         }
+
+        private static string? Header(HttpRequestMessage request, string name) =>
+            request.Headers.TryGetValues(name, out IEnumerable<string>? values) ? values.Single() : null;
 
         protected override void Dispose(bool disposing)
         {
