@@ -1,0 +1,22 @@
+{
+  "block-unconventional-commits.yml": {
+    "hash": "e1d854cced0b0bebfb49e695dd706114fa3634c2d1af1b88f480216a21f72efb",
+    "sha": "4972f8bb33dbeef4ff141444c50ad49adf6cb93d",
+    "source": "nextcloud"
+  },
+  "branch-cleanup.yml": {
+    "hash": "621cfd0244b8b94188ec6c525093eff06b11475d5e866ead7ee11b02b589591a",
+    "sha": "0a5957bffde5b7b2e4d33f6dae5f75c982ee93e6",
+    "source": "ncmake"
+  },
+  "reuse.yml": {
+    "hash": "7507fa539b8cdec70a5de786fbac4e38f1e53f9df404dbfc75bb2fe7950bc010",
+    "sha": "67fdafc440e24937ece9f2f16d7f2c2df2c7efa5",
+    "source": "nextcloud"
+  },
+  "workflow-updater.yml": {
+    "hash": "814e72f4b396311bef70f1a8c576cbab21b3da3a8be445c9a60785d4e32eca1b",
+    "sha": "ee4b34f40f35dc808ff03ad661d6165a8826e2b9",
+    "source": "ncmake"
+  }
+}

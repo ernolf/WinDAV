@@ -483,3 +483,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# ncmake build workspace (stage, artifacts, cache)
+build/
