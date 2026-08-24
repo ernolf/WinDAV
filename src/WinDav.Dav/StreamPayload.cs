@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 
 namespace WinDav.Dav;
@@ -16,6 +17,10 @@ namespace WinDav.Dav;
 /// </remarks>
 internal sealed class StreamPayload : HttpContent
 {
+    [SuppressMessage(
+        "Usage",
+        "CA2213:Disposable fields should be disposed",
+        Justification = "Not disposing this stream is the whole point of the class: it belongs to the caller. See the remarks above.")]
     private readonly Stream _stream;
 
     internal StreamPayload(Stream stream)

@@ -107,7 +107,7 @@ public static class MultiStatusParser
         // A status line reads "HTTP/1.1 200 OK"; only the code is of interest, and the
         // reason phrase is free text that must not be relied on.
         string line = status.Value;
-        int code = line.IndexOf(' ') + 1;
+        int code = line.IndexOf(' ', StringComparison.Ordinal) + 1;
         if (code <= 0 || code + 3 > line.Length
             || !int.TryParse(line.AsSpan(code, 3), NumberStyles.None, CultureInfo.InvariantCulture, out int parsed))
         {

@@ -36,13 +36,20 @@
   </PropertyGroup>
 
   <!-- == Quality gates ==
-       Correctness fails the build. Formatting is a separate gate (dotnet format in CI),
-       so the inner loop does not fight whitespace while nothing sloppy still lands. -->
+       Correctness fails the build, and so do the .editorconfig rules: without
+       EnforceCodeStyleInBuild the IDE rules are only checked by dotnet format in CI, so a
+       naming slip is found after the push instead of before it.
+
+       latest-all turns on every CA rule, not the recommended subset. A rule that does not
+       fit this codebase is switched off by name in .editorconfig with the reason written
+       next to it, so the exception is a decision on record rather than a default nobody
+       ever saw. -->
   <PropertyGroup>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
-    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <AnalysisLevel>latest-all</AnalysisLevel>
     <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
 
