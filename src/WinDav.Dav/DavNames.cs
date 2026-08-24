@@ -33,4 +33,22 @@ public static class DavNames
 
     /// <summary>The <c>DAV:status</c> element carrying an HTTP status line.</summary>
     public static readonly XName Status = Namespace + "status";
+
+    /// <summary>The <c>DAV:resourcetype</c> property, which tells a collection from a file.</summary>
+    public static readonly XName ResourceType = Namespace + "resourcetype";
+
+    /// <summary>The <c>DAV:collection</c> element, found inside <c>DAV:resourcetype</c>.</summary>
+    public static readonly XName Collection = Namespace + "collection";
+
+    /// <summary>The <c>DAV:getcontentlength</c> property, the size in bytes.</summary>
+    public static readonly XName GetContentLength = Namespace + "getcontentlength";
+
+    /// <summary>The <c>DAV:getlastmodified</c> property, an rfc1123-date.</summary>
+    public static readonly XName GetLastModified = Namespace + "getlastmodified";
+
+    /// <summary>The <c>DAV:getetag</c> property, the entity tag.</summary>
+    public static readonly XName GetETag = Namespace + "getetag";
+
+    /// <summary>The <c>DAV:getcontenttype</c> property, the media type.</summary>
+    public static readonly XName GetContentType = Namespace + "getcontenttype";
 }
