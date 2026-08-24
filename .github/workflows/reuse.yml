@@ -1,41 +1,27 @@
-# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
-# SPDX-License-Identifier: GPL-3.0-or-later
+# This workflow is provided via the organization template repository
+#
+# https://github.com/nextcloud/.github
+# https://docs.github.com/en/actions/learn-github-actions/sharing-workflows-with-your-organization
 
-name: REUSE
+# SPDX-FileCopyrightText: 2022 Free Software Foundation Europe e.V. <https://fsfe.org>
+#
+# SPDX-License-Identifier: CC0-1.0
 
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+name: REUSE Compliance Check
+
+on: [pull_request]
 
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
 jobs:
-  lint:
-    name: Check licence headers
-    # Nothing here is Windows specific, and a Linux runner is the cheaper one.
+  reuse-compliance-check:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Check out
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Lint
+      - name: REUSE Compliance Check
         uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6.0.0
-
-      - name: Check the copyright holder
-        # reuse lint verifies that a copyright line exists, not whose name it carries,
-        # so a shortened holder passes it unnoticed. The character class in the pattern
-        # keeps this step from finding itself.
-        run: |
-          holder='[ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>'
-          if git grep -n 'SPDX-FileCopyright[T]ext' | grep -Fv "$holder"; then
-            echo "::error::The lines above name a copyright holder other than: $holder"
-            exit 1
-          fi
