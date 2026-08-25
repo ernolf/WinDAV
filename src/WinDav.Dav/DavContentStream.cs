@@ -1,9 +1,7 @@
 // SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-using WinDav.Dav;
-
-namespace WinDav.Providers.WebDav;
+namespace WinDav.Dav;
 
 /// <summary>
 /// The body of a response, handed out as the plain stream the seam promises.
