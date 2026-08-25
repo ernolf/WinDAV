@@ -10,6 +10,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/WinDav.Dav.Tests/WinDav.Dav.Tests.csproj" />
+    <Project Path="tests/WinDav.Providers.Nextcloud.Tests/WinDav.Providers.Nextcloud.Tests.csproj" />
     <Project Path="tests/WinDav.Providers.WebDav.Tests/WinDav.Providers.WebDav.Tests.csproj" />
   </Folder>
 </Solution>
