@@ -3,17 +3,20 @@
 
 using System.Buffers;
 using System.Globalization;
+using System.Xml.Linq;
+using WinDav.Abstractions;
 using WinDav.Dav;
 
 namespace WinDav.Providers.Nextcloud;
 
 /// <summary>
-/// A Nextcloud store, which is a WebDAV store that can also take a large file in pieces.
+/// A Nextcloud store, which is a WebDAV store that can also take a large file in pieces and
+/// says more about an entry than RFC 4918 provides for.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Everything a Nextcloud server does over plain RFC 4918 it inherits. What it adds here is
-/// the chunked upload of version 2, documented under
+/// Everything a Nextcloud server does over plain RFC 4918 it inherits. The first thing it
+/// adds here is the chunked upload of version 2, documented under
 /// <see href="https://docs.nextcloud.com/server/latest/developer_manual/client_apis/WebDAV/chunking.html"/>:
 /// the pieces are written into an upload directory of their own and the server assembles
 /// them when the last one has arrived. A connection that breaks then costs one chunk instead
@@ -23,6 +26,12 @@ namespace WinDav.Providers.Nextcloud;
 /// The chunked path is used only when it can be used safely; see
 /// <see cref="WriteAsync(string, Stream, string?, CancellationToken)"/> for the three cases
 /// that fall back to a single PUT.
+/// </para>
+/// <para>
+/// The other thing it adds is the two properties of the vendor namespaces that the seam has
+/// a place for, the identifier and the permissions. See <see cref="NextcloudNames"/> for
+/// where they are documented and <see cref="RequestedProperties"/> for why they have to be
+/// asked for by name.
 /// </para>
 /// </remarks>
 public sealed class NextcloudProvider : DavStorageProvider
@@ -58,6 +67,20 @@ public sealed class NextcloudProvider : DavStorageProvider
     // The size of the whole file, which is what a quota can be checked against. Without it
     // an upload over quota is only refused when the chunks are assembled.
     private const string TotalLengthHeader = "OC-Total-Length";
+
+    // The properties every PROPFIND asks for: the five of RFC 4918 the seam reads, the
+    // creation date, and the two of the vendor namespaces.
+    private static readonly XName[] s_properties =
+    [
+        DavNames.ResourceType,
+        DavNames.GetContentLength,
+        DavNames.GetLastModified,
+        DavNames.CreationDate,
+        DavNames.GetETag,
+        DavNames.GetContentType,
+        NextcloudNames.Id,
+        NextcloudNames.Permissions,
+    ];
 
     private readonly Uri _uploads;
 
@@ -98,6 +121,18 @@ public sealed class NextcloudProvider : DavStorageProvider
         _uploads = DavPath.AsCollection(uploadsUri);
         _chunkSize = chunkSize;
     }
+
+    /// <summary>
+    /// Gets the properties a PROPFIND asks for.
+    /// </summary>
+    /// <remarks>
+    /// The server answers a PROPFIND without a body with a small set of its own choosing, and
+    /// <c>DAV:allprop</c> with the properties it considers live, which the vendor namespaces
+    /// are not part of. Either way, what is not named does not arrive, so the list is named in
+    /// full. Naming it also fixes what the request costs: the server works out only what was
+    /// asked for.
+    /// </remarks>
+    protected override IReadOnlyList<XName> RequestedProperties => s_properties;
 
     /// <summary>
     /// Builds a provider for a user's file area, with the two URIs a stock Nextcloud uses.
@@ -184,6 +219,75 @@ public sealed class NextcloudProvider : DavStorageProvider
         await UploadInChunksAsync(path, content, length.Value, cancellationToken).ConfigureAwait(false);
 
         return null;
+    }
+
+    /// <summary>
+    /// Reads <c>oc:id</c>, the file identifier with the identifier of the instance behind it.
+    /// </summary>
+    /// <param name="resource">What the server said about it.</param>
+    /// <returns>The identifier, or <see langword="null"/> when the server sent none.</returns>
+    /// <remarks>
+    /// The other identifier, <c>oc:fileid</c>, is the same number without the instance behind
+    /// it. It is the shorter one and it is the one the web interface puts in a link, but two
+    /// servers that share a file hand out the same number for different files, so it is not
+    /// what an entry can be recognised by.
+    /// </remarks>
+    protected override string? ReadId(DavResource resource)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+
+        if (!resource.Properties.TryGetValue(NextcloudNames.Id, out XElement? element))
+        {
+            return null;
+        }
+
+        string id = element.Value;
+
+        return string.IsNullOrWhiteSpace(id) ? null : id;
+    }
+
+    /// <summary>
+    /// Reads <c>oc:permissions</c>, which the server writes as one letter per permission.
+    /// </summary>
+    /// <param name="resource">What the server said about it.</param>
+    /// <returns>
+    /// What may be done with the entry, or <see langword="null"/> when the server did not
+    /// state it. A property that arrived empty becomes <see cref="EntryPermissions.None"/>,
+    /// which is the server saying that nothing may be done, and not the same as silence.
+    /// </returns>
+    /// <remarks>
+    /// Two of the letters the server can send are dropped here. <c>S</c> and <c>M</c> say
+    /// that an entry is shared or mounted from elsewhere, which is where it comes from and
+    /// not what may be done with it. A letter that is not known is dropped as well: the list
+    /// belongs to the server, and a later one may lengthen it.
+    /// </remarks>
+    protected override EntryPermissions? ReadPermissions(DavResource resource)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+
+        if (!resource.Properties.TryGetValue(NextcloudNames.Permissions, out XElement? element))
+        {
+            return null;
+        }
+
+        EntryPermissions permissions = EntryPermissions.None;
+        foreach (char letter in element.Value)
+        {
+            permissions |= letter switch
+            {
+                'G' => EntryPermissions.Read,
+                'W' => EntryPermissions.Write,
+                'D' => EntryPermissions.Delete,
+                'N' => EntryPermissions.Rename,
+                'V' => EntryPermissions.Move,
+                'C' => EntryPermissions.CreateFile,
+                'K' => EntryPermissions.CreateDirectory,
+                'R' => EntryPermissions.Share,
+                _ => EntryPermissions.None,
+            };
+        }
+
+        return permissions;
     }
 
     private async Task UploadInChunksAsync(string path, Stream content, long length, CancellationToken cancellationToken)

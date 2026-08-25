@@ -18,11 +18,12 @@ namespace WinDav.Dav;
 /// handed out.
 /// </para>
 /// <para>
-/// A vendor changes three things at most: which properties a PROPFIND asks for
-/// (<see cref="RequestedProperties"/>), what a described resource becomes
-/// (<see cref="ToEntry"/>), and how bytes are written
-/// (<see cref="WriteAsync(string, Stream, string?, CancellationToken)"/>). Everything else
-/// is the protocol, which is the same everywhere.
+/// A vendor changes little: which properties a PROPFIND asks for
+/// (<see cref="RequestedProperties"/>), what two of them mean
+/// (<see cref="ReadId(DavResource)"/> and <see cref="ReadPermissions(DavResource)"/>), what
+/// a described resource becomes as a whole (<see cref="ToEntry"/>), and how bytes are
+/// written (<see cref="WriteAsync(string, Stream, string?, CancellationToken)"/>).
+/// Everything else is the protocol, which is the same everywhere.
 /// </para>
 /// </remarks>
 public abstract class DavStorageProvider : IStorageProvider
@@ -314,10 +315,34 @@ public abstract class DavStorageProvider : IStorageProvider
         {
             Length = resource.ContentLength,
             LastModified = resource.LastModified,
+            Created = resource.CreationDate,
             ETag = resource.ETag,
             ContentType = resource.ContentType,
+            Id = ReadId(resource),
+            Permissions = ReadPermissions(resource),
         };
     }
+
+    /// <summary>
+    /// Reads what the store calls the resource. See <see cref="RemoteEntry.Id"/>.
+    /// </summary>
+    /// <param name="resource">What the server said about it.</param>
+    /// <returns>
+    /// The identifier, or <see langword="null"/> when there is none. RFC 4918 has no such
+    /// property, so this is where a vendor that does answers with its own.
+    /// </returns>
+    protected virtual string? ReadId(DavResource resource) => null;
+
+    /// <summary>
+    /// Reads what may be done with the resource. See <see cref="RemoteEntry.Permissions"/>.
+    /// </summary>
+    /// <param name="resource">What the server said about it.</param>
+    /// <returns>
+    /// The permissions, or <see langword="null"/> when the server did not state them. RFC
+    /// 4918 has no property for them either, so the same applies as to
+    /// <see cref="ReadId(DavResource)"/>.
+    /// </returns>
+    protected virtual EntryPermissions? ReadPermissions(DavResource resource) => null;
 
     /// <summary>
     /// Asks the server about a resource and turns the ways that can fail into the seam's

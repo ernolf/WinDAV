@@ -52,6 +52,9 @@ public static class DavNames
     /// <summary>The <c>DAV:getlastmodified</c> property, an rfc1123-date.</summary>
     public static readonly XName GetLastModified = Namespace + "getlastmodified";
 
+    /// <summary>The <c>DAV:creationdate</c> property, an ISO 8601 date-time.</summary>
+    public static readonly XName CreationDate = Namespace + "creationdate";
+
     /// <summary>The <c>DAV:getetag</c> property, the entity tag.</summary>
     public static readonly XName GetETag = Namespace + "getetag";
 

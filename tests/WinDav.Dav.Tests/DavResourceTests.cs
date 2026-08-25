@@ -38,6 +38,7 @@ public sealed class DavResourceTests
                 <d:resourcetype/>
                 <d:getcontentlength>17</d:getcontentlength>
                 <d:getlastmodified>Tue, 11 Aug 2026 09:31:00 GMT</d:getlastmodified>
+                <d:creationdate>2026-08-11T09:29:00Z</d:creationdate>
                 <d:getetag>&quot;5f2a1b3c4d5e6&quot;</d:getetag>
                 <d:getcontenttype>text/plain; charset=utf-8</d:getcontenttype>
               </d:prop>
@@ -77,6 +78,30 @@ public sealed class DavResourceTests
     }
 
     [Fact]
+    public void FromResponseReadsTheCreationDate()
+    {
+        Assert.Equal(
+            new DateTimeOffset(2026, 8, 11, 9, 29, 0, TimeSpan.Zero),
+            Read(Listing, 1).CreationDate);
+
+        Assert.Null(Read(Listing, 0).CreationDate);
+    }
+
+    [Fact]
+    public void FromResponseTurnsACreationDateWithAnOffsetIntoUtc()
+    {
+        string listing = Listing.Replace(
+            "<d:creationdate>2026-08-11T09:29:00Z</d:creationdate>",
+            "<d:creationdate>2026-08-11T11:29:00+02:00</d:creationdate>",
+            StringComparison.Ordinal);
+
+        DateTimeOffset? created = Read(listing, 1).CreationDate;
+
+        Assert.Equal(new DateTimeOffset(2026, 8, 11, 9, 29, 0, TimeSpan.Zero), created);
+        Assert.Equal(TimeSpan.Zero, created?.Offset);
+    }
+
+    [Fact]
     public void FromResponseKeepsTheQuotesOfTheETag() =>
         Assert.Equal("\"5f2a1b3c4d5e6\"", Read(Listing, 1).ETag);
 
@@ -96,6 +121,7 @@ public sealed class DavResourceTests
                   <d:prop>
                     <d:getcontentlength>seventeen</d:getcontentlength>
                     <d:getlastmodified>2026-08-11T09:31:00Z</d:getlastmodified>
+                    <d:creationdate>whenever</d:creationdate>
                   </d:prop>
                   <d:status>HTTP/1.1 200 OK</d:status>
                 </d:propstat>
@@ -107,6 +133,7 @@ public sealed class DavResourceTests
 
         Assert.Null(resource.ContentLength);
         Assert.Null(resource.LastModified);
+        Assert.Null(resource.CreationDate);
     }
 
     [Fact]

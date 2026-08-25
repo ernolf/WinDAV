@@ -39,6 +39,28 @@ public sealed class RemoteEntry(string path, bool isDirectory)
     public DateTimeOffset? LastModified { get; init; }
 
     /// <summary>
+    /// Gets when it came into being, or <see langword="null"/> when the store did not say.
+    /// </summary>
+    public DateTimeOffset? Created { get; init; }
+
+    /// <summary>
+    /// Gets what the store calls this entry, or <see langword="null"/> when it has no such
+    /// name for it.
+    /// </summary>
+    /// <remarks>
+    /// It is opaque, and it is not the path: the point of it is that it survives a rename
+    /// and a move, so that what happened to an entry can be told from an entry disappearing
+    /// and another one appearing. Only the store it came from can read it.
+    /// </remarks>
+    public string? Id { get; init; }
+
+    /// <summary>
+    /// Gets what may be done with the entry, or <see langword="null"/> when the store did
+    /// not say. See <see cref="EntryPermissions"/> for what the absence means.
+    /// </summary>
+    public EntryPermissions? Permissions { get; init; }
+
+    /// <summary>
     /// Gets the token that stands for this version of the entry, or <see langword="null"/>
     /// when the store has none. It is opaque: only the store it came from can read it, and
     /// it is passed back unchanged.
