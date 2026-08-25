@@ -24,6 +24,14 @@
     <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
   </PropertyGroup>
 
+  <!-- == Identity readable at run time ==
+       ProductInfo reads these back out of the assembly, so the name reaches the running
+       program without a literal in any C# file. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="ProductName" Value="$(ProductName)" />
+    <AssemblyMetadata Include="ProductSlug" Value="$(ProductSlug)" />
+  </ItemGroup>
+
   <!-- == Language and platform ==
        net10.0 without a platform suffix is the default on purpose: the protocol and
        provider layers must not reach for Windows APIs. Only the projects that host the

@@ -9,6 +9,7 @@
     <Project Path="src/WinDav.Providers.WebDav/WinDav.Providers.WebDav.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/WinDav.Core.Tests/WinDav.Core.Tests.csproj" />
     <Project Path="tests/WinDav.Dav.Tests/WinDav.Dav.Tests.csproj" />
     <Project Path="tests/WinDav.Providers.Nextcloud.Tests/WinDav.Providers.Nextcloud.Tests.csproj" />
     <Project Path="tests/WinDav.Providers.WebDav.Tests/WinDav.Providers.WebDav.Tests.csproj" />
