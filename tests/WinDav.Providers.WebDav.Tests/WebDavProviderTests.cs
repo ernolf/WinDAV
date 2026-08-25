@@ -4,6 +4,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Xml.Linq;
 using WinDav.Abstractions;
 using WinDav.Dav;
 using Xunit;
@@ -35,6 +36,7 @@ public sealed class WebDavProviderTests
                 <d:getcontenttype>text/plain</d:getcontenttype>
                 <d:getetag>"abc123"</d:getetag>
                 <d:getlastmodified>Mon, 24 Aug 2026 10:11:12 GMT</d:getlastmodified>
+                <d:creationdate>2026-08-24T10:10:00Z</d:creationdate>
               </d:prop>
               <d:status>HTTP/1.1 200 OK</d:status>
             </d:propstat>
@@ -78,7 +80,38 @@ public sealed class WebDavProviderTests
         Assert.Equal("text/plain", note.ContentType);
         Assert.Equal("\"abc123\"", note.ETag);
         Assert.Equal(new DateTimeOffset(2026, 8, 24, 10, 11, 12, TimeSpan.Zero), note.LastModified);
+        Assert.Equal(new DateTimeOffset(2026, 8, 24, 10, 10, 0, TimeSpan.Zero), note.Created);
         Assert.True(entries[1].IsDirectory);
+    }
+
+    [Fact]
+    public async Task AnEntryOfAPlainServerHasNoIdentifierAndNoPermissions()
+    {
+        using HttpClient httpClient = new(new RecordingHandler(MultiStatus(Listing)));
+
+        IReadOnlyList<RemoteEntry> entries = await Provider(httpClient)
+            .ListAsync("/", TestContext.Current.CancellationToken);
+
+        // RFC 4918 has no property for either, and this provider invents nothing. Null is
+        // the seam's way of saying so; see EntryPermissions on what it is not.
+        Assert.Null(entries[0].Id);
+        Assert.Null(entries[0].Permissions);
+    }
+
+    [Fact]
+    public async Task APropFindOfAPlainServerAsksForEveryProperty()
+    {
+        RecordingHandler handler = new(MultiStatus(Listing));
+        using HttpClient httpClient = new(handler);
+
+        await Provider(httpClient).ListAsync("/", TestContext.Current.CancellationToken);
+
+        // A provider that names no properties of its own asks for all of them, which is what
+        // a server without a vendor namespace has anyway.
+        XElement propfind = XDocument.Parse(handler.Body!).Root!;
+
+        Assert.Equal(DavNames.PropFind, propfind.Name);
+        Assert.NotNull(propfind.Element(DavNames.AllProp));
     }
 
     [Fact]

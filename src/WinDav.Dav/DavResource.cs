@@ -29,6 +29,7 @@ public sealed class DavResource
         IsCollection = ReadIsCollection(properties);
         ContentLength = ReadContentLength(properties);
         LastModified = ReadLastModified(properties);
+        CreationDate = ReadCreationDate(properties);
         ETag = ReadText(properties, DavNames.GetETag);
         ContentType = ReadText(properties, DavNames.GetContentType);
     }
@@ -60,6 +61,12 @@ public sealed class DavResource
     /// server did not state one.
     /// </summary>
     public DateTimeOffset? LastModified { get; }
+
+    /// <summary>
+    /// Gets the time the resource came into being, in UTC, or <see langword="null"/> when
+    /// the server did not state one.
+    /// </summary>
+    public DateTimeOffset? CreationDate { get; }
 
     /// <summary>
     /// Gets the entity tag as the server wrote it, quotes and any weakness prefix included,
@@ -137,6 +144,26 @@ public sealed class DavResource
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
             out DateTimeOffset lastModified)
             ? lastModified
+            : null;
+    }
+
+    // Unlike getlastmodified, creationdate is an ISO 8601 date-time (RFC 4918 section 15.1),
+    // which servers write with an offset or with a Z. Both forms are read here, and one
+    // without either is taken as UTC rather than as the time zone of this machine.
+    private static DateTimeOffset? ReadCreationDate(IReadOnlyDictionary<XName, XElement> properties)
+    {
+        string? text = ReadText(properties, DavNames.CreationDate);
+        if (text is null)
+        {
+            return null;
+        }
+
+        return DateTimeOffset.TryParse(
+            text,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out DateTimeOffset created)
+            ? created
             : null;
     }
 
