@@ -76,6 +76,13 @@ public static class DavPath
     /// <see cref="ProviderError.Protocol"/> when the href is not a URI, or names something
     /// outside the base. Either means the answer cannot be trusted to describe this account.
     /// </exception>
+    /// <remarks>
+    /// Both sides are compared segment by segment and unescaped. A server is free to write a
+    /// segment in an escaping of its own choosing, so <c>%40</c> here and <c>@</c> there name
+    /// the same collection; comparing the written forms would call that a different one.
+    /// Segments also keep a name from reaching past its own end, where a base of <c>/x</c>
+    /// would otherwise swallow a sibling named <c>/xyz</c>.
+    /// </remarks>
     public static string FromHref(Uri baseUri, string href)
     {
         ArgumentNullException.ThrowIfNull(baseUri);
@@ -88,32 +95,35 @@ public static class DavPath
                 $"The server named a resource as \"{href}\", which is not a URI.");
         }
 
-        string basePath = baseUri.AbsolutePath;
-        string hrefPath = absolute.AbsolutePath;
+        // Without the trailing slash, so that the base is as many segments long as it names.
+        string[] baseSegments = Segments(baseUri.AbsolutePath.TrimEnd('/'));
+        string[] hrefSegments = Segments(absolute.AbsolutePath);
 
-        if (!hrefPath.StartsWith(basePath, StringComparison.Ordinal))
+        if (hrefSegments.Length < baseSegments.Length
+            || !hrefSegments.AsSpan(0, baseSegments.Length).SequenceEqual(baseSegments))
         {
             throw new ProviderException(
                 ProviderError.Protocol,
                 $"The server named \"{href}\", which is not below the base of this provider.");
         }
 
-        string relative = hrefPath[basePath.Length..].TrimEnd('/');
+        string relative = string.Join('/', hrefSegments[baseSegments.Length..]).TrimEnd('/');
 
-        if (relative.Length == 0)
-        {
-            return "/";
-        }
+        return relative.Length == 0 ? "/" : "/" + relative;
+    }
 
-        // Unescaped one segment at a time: a %2F inside a name belongs to that name, and
-        // unescaping the whole string at once would turn it into a separator.
-        string[] segments = relative.Split('/');
+    // Unescaped one segment at a time: a %2F inside a name belongs to that name, and
+    // unescaping the whole string at once would turn it into a separator.
+    private static string[] Segments(string absolutePath)
+    {
+        string[] segments = absolutePath.Split('/');
+
         for (int i = 0; i < segments.Length; i++)
         {
             segments[i] = Uri.UnescapeDataString(segments[i]);
         }
 
-        return "/" + string.Join('/', segments);
+        return segments;
     }
 
     private static string Relative(string path)
