@@ -44,6 +44,9 @@ public sealed class NextcloudProvider : DavStorageProvider
     // leaves a terabyte of file, which is past anything a file system hands over in one go.
     private const long LargestChunkSize = 100L * 1024 * 1024;
 
+    // Where a Nextcloud answers WebDAV, relative to the server's base address.
+    private const string DavEndpoint = "remote.php/dav/";
+
     // The name the server answers under once every chunk is in place. Moving it is what
     // triggers the assembly.
     private const string AssembledName = ".file";
@@ -97,24 +100,52 @@ public sealed class NextcloudProvider : DavStorageProvider
     }
 
     /// <summary>
-    /// Builds a provider for a user's whole file area, with the two URIs a stock Nextcloud
-    /// uses.
+    /// Builds a provider for a user's file area, with the two URIs a stock Nextcloud uses.
     /// </summary>
     /// <param name="client">The client the requests go out on.</param>
     /// <param name="davRoot">The DAV root, <c>https://server/remote.php/dav/</c>.</param>
     /// <param name="userId">
     /// The user's identifier, which is the one in the path and not the display name.
     /// </param>
-    /// <returns>A provider rooted at that user's files.</returns>
-    public static NextcloudProvider ForUser(DavClient client, Uri davRoot, string userId)
+    /// <param name="remotePath">
+    /// The directory below the user's files that becomes the root, or <c>/</c> for all of
+    /// them.
+    /// </param>
+    /// <returns>A provider rooted there.</returns>
+    public static NextcloudProvider ForUser(DavClient client, Uri davRoot, string userId, string remotePath = "/")
     {
         ArgumentNullException.ThrowIfNull(davRoot);
         ArgumentException.ThrowIfNullOrEmpty(userId);
 
         Uri root = DavPath.AsCollection(davRoot);
         string segment = Uri.EscapeDataString(userId);
+        Uri files = DavPath.ToCollectionUri(new Uri(root, $"files/{segment}/"), remotePath);
 
-        return new NextcloudProvider(client, new Uri(root, $"files/{segment}/"), new Uri(root, $"uploads/{segment}/"));
+        return new NextcloudProvider(client, files, new Uri(root, $"uploads/{segment}/"));
+    }
+
+    /// <summary>
+    /// Builds a provider from a server's base address, which is what a configuration holds.
+    /// </summary>
+    /// <param name="client">The client the requests go out on.</param>
+    /// <param name="server">The server, <c>https://server/</c> or an instance below a path.</param>
+    /// <param name="userId">
+    /// The user's identifier, which is the one in the path and not the display name.
+    /// </param>
+    /// <param name="remotePath">
+    /// The directory below the user's files that becomes the root, or <c>/</c> for all of
+    /// them.
+    /// </param>
+    /// <returns>A provider rooted there.</returns>
+    /// <remarks>
+    /// This and <see cref="ForUser"/> are the only places that know where a Nextcloud keeps
+    /// its DAV endpoint, its files and its upload area.
+    /// </remarks>
+    public static NextcloudProvider ForServer(DavClient client, Uri server, string userId, string remotePath = "/")
+    {
+        ArgumentNullException.ThrowIfNull(server);
+
+        return ForUser(client, new Uri(DavPath.AsCollection(server), DavEndpoint), userId, remotePath);
     }
 
     /// <summary>

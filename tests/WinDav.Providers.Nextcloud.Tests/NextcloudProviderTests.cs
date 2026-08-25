@@ -226,6 +226,68 @@ public sealed class NextcloudProviderTests
     }
 
     [Fact]
+    public async Task ForServerFindsTheEndpointBelowTheAddressAPersonWouldType()
+    {
+        RecordingHandler handler = new();
+        using HttpClient httpClient = new(handler);
+        using MemoryStream content = new(Pattern(16));
+
+        NextcloudProvider provider = NextcloudProvider.ForServer(
+            new DavClient(httpClient),
+            new Uri("https://cloud.example.com"),
+            "ernolf");
+
+        await provider.WriteAsync("/note.txt", content, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new Uri("https://cloud.example.com/remote.php/dav/files/ernolf/note.txt"),
+            Assert.Single(handler.Exchanges).Uri);
+    }
+
+    // A server under a path of its own is what a reverse proxy in front of two applications
+    // produces, and the endpoint sits below that path rather than at the host's root.
+    [Fact]
+    public async Task ForServerKeepsThePathTheServerLivesUnder()
+    {
+        RecordingHandler handler = new();
+        using HttpClient httpClient = new(handler);
+        using MemoryStream content = new(Pattern(16));
+
+        NextcloudProvider provider = NextcloudProvider.ForServer(
+            new DavClient(httpClient),
+            new Uri("https://example.com/cloud"),
+            "ernolf");
+
+        await provider.WriteAsync("/note.txt", content, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new Uri("https://example.com/cloud/remote.php/dav/files/ernolf/note.txt"),
+            Assert.Single(handler.Exchanges).Uri);
+    }
+
+    // What turns one account into several mounts: everything above the remote path is out of
+    // reach of the provider that was built for it.
+    [Fact]
+    public async Task ARemotePathBecomesTheRootOfWhatIsOffered()
+    {
+        RecordingHandler handler = new();
+        using HttpClient httpClient = new(handler);
+        using MemoryStream content = new(Pattern(16));
+
+        NextcloudProvider provider = NextcloudProvider.ForServer(
+            new DavClient(httpClient),
+            new Uri("https://cloud.example.com"),
+            "ernolf",
+            "/Documents");
+
+        await provider.WriteAsync("/note.txt", content, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new Uri("https://cloud.example.com/remote.php/dav/files/ernolf/Documents/note.txt"),
+            Assert.Single(handler.Exchanges).Uri);
+    }
+
+    [Fact]
     public void AChunkUnderWhatTheServerAcceptsIsRefused()
     {
         using HttpClient httpClient = new(new RecordingHandler());
