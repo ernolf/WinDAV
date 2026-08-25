@@ -177,7 +177,7 @@ public abstract class DavStorageProvider : IStorageProvider
         try
         {
             return await Client
-                .PutAsync(uri, content, contentType: null, ifMatch, cancellationToken)
+                .PutAsync(uri, content, contentType: null, ifMatch, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (HttpRequestException exception)
@@ -193,7 +193,7 @@ public abstract class DavStorageProvider : IStorageProvider
 
         try
         {
-            await Client.MkColAsync(uri, cancellationToken).ConfigureAwait(false);
+            await Client.MkColAsync(uri, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
         catch (HttpRequestException exception)
         {
@@ -234,7 +234,7 @@ public abstract class DavStorageProvider : IStorageProvider
 
         try
         {
-            await Client.MoveAsync(source, destination, overwrite, cancellationToken).ConfigureAwait(false);
+            await Client.MoveAsync(source, destination, overwrite, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
         catch (HttpRequestException exception)
         {

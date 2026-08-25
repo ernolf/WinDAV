@@ -212,6 +212,7 @@ public sealed class DavClient
     /// An entity tag the resource must still carry for the write to happen, in the form the
     /// server wrote it. Without one the write overwrites whatever is there.
     /// </param>
+    /// <param name="headers">Extra request headers, see <see cref="MkColAsync"/>.</param>
     /// <param name="cancellationToken">Cancels the request.</param>
     /// <returns>
     /// The entity tag of the written resource when the server stated one, otherwise
@@ -227,6 +228,7 @@ public sealed class DavClient
         Stream content,
         string? contentType = null,
         string? ifMatch = null,
+        IEnumerable<KeyValuePair<string, string>>? headers = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(uri);
@@ -245,6 +247,8 @@ public sealed class DavClient
             request.Headers.IfMatch.Add(EntityTagHeaderValue.Parse(ifMatch));
         }
 
+        AddHeaders(request, headers);
+
         using HttpResponseMessage response = await SendExpectingAsync(request, s_putAccepts, cancellationToken)
             .ConfigureAwait(false);
 
@@ -255,17 +259,26 @@ public sealed class DavClient
     /// Creates a collection, that is a directory.
     /// </summary>
     /// <param name="uri">The collection to create, named with a trailing slash.</param>
+    /// <param name="headers">
+    /// Extra request headers, or <see langword="null"/>. This is where a provider puts what
+    /// its vendor asks for; the client knows none of them by name and sends them as given.
+    /// </param>
     /// <param name="cancellationToken">Cancels the request.</param>
     /// <returns>A task that completes when the collection exists.</returns>
     /// <exception cref="HttpRequestException">
     /// The server refused. <see cref="HttpStatusCode.MethodNotAllowed"/> means something is
     /// already there, <see cref="HttpStatusCode.Conflict"/> that the parent is missing.
     /// </exception>
-    public async Task MkColAsync(Uri uri, CancellationToken cancellationToken = default)
+    public async Task MkColAsync(
+        Uri uri,
+        IEnumerable<KeyValuePair<string, string>>? headers = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(uri);
 
         using HttpRequestMessage request = new(s_mkCol, uri);
+
+        AddHeaders(request, headers);
 
         using HttpResponseMessage response = await SendExpectingAsync(request, s_mkColAccepts, cancellationToken)
             .ConfigureAwait(false);
@@ -299,6 +312,7 @@ public sealed class DavClient
     /// <param name="source">The resource to move.</param>
     /// <param name="destination">Where it goes, as an absolute URI.</param>
     /// <param name="overwrite">Whether an existing destination may be replaced.</param>
+    /// <param name="headers">Extra request headers, see <see cref="MkColAsync"/>.</param>
     /// <param name="cancellationToken">Cancels the request.</param>
     /// <returns>A task that completes when the resource has moved.</returns>
     /// <exception cref="HttpRequestException">
@@ -309,8 +323,9 @@ public sealed class DavClient
         Uri source,
         Uri destination,
         bool overwrite = false,
+        IEnumerable<KeyValuePair<string, string>>? headers = null,
         CancellationToken cancellationToken = default) =>
-        SendRelocationAsync(s_move, source, destination, overwrite, depth: null, cancellationToken);
+        SendRelocationAsync(s_move, source, destination, overwrite, depth: null, headers, cancellationToken);
 
     /// <summary>
     /// Copies a resource.
@@ -340,7 +355,7 @@ public sealed class DavClient
                 "COPY takes 0 or infinity; RFC 4918 section 9.8.3 has no meaning for 1.");
         }
 
-        return SendRelocationAsync(s_copy, source, destination, overwrite, depth, cancellationToken);
+        return SendRelocationAsync(s_copy, source, destination, overwrite, depth, headers: null, cancellationToken);
     }
 
     private async Task SendRelocationAsync(
@@ -349,6 +364,7 @@ public sealed class DavClient
         Uri destination,
         bool overwrite,
         DavDepth? depth,
+        IEnumerable<KeyValuePair<string, string>>? headers,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -370,8 +386,23 @@ public sealed class DavClient
             request.Headers.Add("Depth", DepthHeader(depth.Value));
         }
 
+        AddHeaders(request, headers);
+
         using HttpResponseMessage response = await SendExpectingAsync(request, s_relocationAccepts, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private static void AddHeaders(HttpRequestMessage request, IEnumerable<KeyValuePair<string, string>>? headers)
+    {
+        if (headers is null)
+        {
+            return;
+        }
+
+        foreach (KeyValuePair<string, string> header in headers)
+        {
+            request.Headers.Add(header.Key, header.Value);
+        }
     }
 
     private async Task<HttpResponseMessage> SendExpectingAsync(

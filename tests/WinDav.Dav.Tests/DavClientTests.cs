@@ -297,7 +297,7 @@ public sealed class DavClientTests
         RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.Created));
         using HttpClient httpClient = new(handler);
 
-        await new DavClient(httpClient).MkColAsync(s_folder, TestContext.Current.CancellationToken);
+        await new DavClient(httpClient).MkColAsync(s_folder, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("MKCOL", handler.Method);
     }
@@ -310,7 +310,7 @@ public sealed class DavClientTests
         using HttpClient httpClient = new(new RecordingHandler(new HttpResponseMessage(HttpStatusCode.MethodNotAllowed)));
 
         HttpRequestException exception = await Assert.ThrowsAsync<HttpRequestException>(
-            () => new DavClient(httpClient).MkColAsync(s_folder, TestContext.Current.CancellationToken));
+            () => new DavClient(httpClient).MkColAsync(s_folder, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HttpStatusCode.MethodNotAllowed, exception.StatusCode);
     }
@@ -347,7 +347,7 @@ public sealed class DavClientTests
         using HttpClient httpClient = new(handler);
 
         await new DavClient(httpClient)
-            .MoveAsync(s_file, s_otherFile, overwrite, TestContext.Current.CancellationToken);
+            .MoveAsync(s_file, s_otherFile, overwrite, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("MOVE", handler.Method);
         Assert.Equal(s_otherFile.AbsoluteUri, handler.Destination);
@@ -396,7 +396,7 @@ public sealed class DavClientTests
                 s_file,
                 new Uri("a%20note.txt", UriKind.Relative),
                 overwrite: false,
-                TestContext.Current.CancellationToken));
+                cancellationToken: TestContext.Current.CancellationToken));
     }
 
     private static HttpResponseMessage Body(HttpStatusCode status, string body) =>
