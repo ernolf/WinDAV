@@ -20,10 +20,51 @@ public sealed class WinDavFileSystemTests
     private const int Refused = FileSystemBase.STATUS_MEDIA_WRITE_PROTECTED;
 
     [Fact]
-    public void TheVolumeNamesASizeAndNothingOfItIsInUse()
+    public void AStoreThatSaysNothingAboutItsRoomNamesASizeWithNothingInUse()
     {
         WinDavFileSystem fileSystem = Mount(new FakeStore());
 
+        Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.GetVolumeInfo(out VolumeInfo volumeInfo));
+        Assert.NotEqual(0UL, volumeInfo.TotalSize);
+        Assert.Equal(volumeInfo.TotalSize, volumeInfo.FreeSize);
+    }
+
+    [Fact]
+    public void TheVolumeIsWhatIsInUseAndWhatIsLeftPutTogether()
+    {
+        FakeStore store = new() { Space = new StorageSpace { Used = 3000, Available = 7000 } };
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.GetVolumeInfo(out VolumeInfo volumeInfo));
+        Assert.Equal(10000UL, volumeInfo.TotalSize);
+        Assert.Equal(7000UL, volumeInfo.FreeSize);
+    }
+
+    [Fact]
+    public void AStoreWithoutALimitIsStillShownWithWhatItHolds()
+    {
+        // An account without a quota: what it holds is a figure, what is left in it is not.
+        FakeStore store = new() { Space = new StorageSpace { Used = 3000 } };
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.GetVolumeInfo(out VolumeInfo volumeInfo));
+
+        // The headroom is a figure of this program's own, so what is asserted is what it is
+        // for: room enough that nothing looks full, with the real amount in use beside it.
+        Assert.Equal(volumeInfo.FreeSize + 3000UL, volumeInfo.TotalSize);
+        Assert.True(volumeInfo.FreeSize > 3000UL);
+    }
+
+    [Fact]
+    public void AStoreThatCannotBeReachedStillNamesASize()
+    {
+        FakeStore store = new() { FailWith = ProviderError.Unreachable };
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        // A drive that answers its own size with an error is a drive that looks broken.
         Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.GetVolumeInfo(out VolumeInfo volumeInfo));
         Assert.NotEqual(0UL, volumeInfo.TotalSize);
         Assert.Equal(volumeInfo.TotalSize, volumeInfo.FreeSize);

@@ -235,5 +235,8 @@ public sealed class DavProviderFactoryTests
 
         public Task CopyAsync(string sourcePath, string destinationPath, bool overwrite, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public Task<StorageSpace> GetSpaceAsync(string path, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

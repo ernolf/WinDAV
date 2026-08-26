@@ -6,7 +6,7 @@ using System.Xml.Linq;
 namespace WinDav.Dav;
 
 /// <summary>
-/// The XML names RFC 4918 defines.
+/// The XML names RFC 4918 defines, along with the two RFC 4331 adds to the same namespace.
 /// </summary>
 public static class DavNames
 {
@@ -60,4 +60,16 @@ public static class DavNames
 
     /// <summary>The <c>DAV:getcontenttype</c> property, the media type.</summary>
     public static readonly XName GetContentType = Namespace + "getcontenttype";
+
+    /// <summary>
+    /// The <c>DAV:quota-available-bytes</c> property of RFC 4331 section 3, how much may
+    /// still be written into a collection.
+    /// </summary>
+    public static readonly XName QuotaAvailableBytes = Namespace + "quota-available-bytes";
+
+    /// <summary>
+    /// The <c>DAV:quota-used-bytes</c> property of RFC 4331 section 4, how much a collection
+    /// already holds.
+    /// </summary>
+    public static readonly XName QuotaUsedBytes = Namespace + "quota-used-bytes";
 }

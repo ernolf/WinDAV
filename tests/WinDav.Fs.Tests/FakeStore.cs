@@ -31,6 +31,10 @@ internal sealed class FakeStore : IStorageProvider
     // is arranged.
     public ProviderError? FailWith { get; set; }
 
+    // What the store says about its room. Nothing by default, which is a store that keeps no
+    // such figure.
+    public StorageSpace Space { get; set; } = StorageSpace.Unknown;
+
     public void AddDirectory(string path) => _entries[path] = new RemoteEntry(path, true);
 
     public void AddFile(
@@ -90,6 +94,13 @@ internal sealed class FakeStore : IStorageProvider
         Fail();
 
         return Task.FromResult(Find(path));
+    }
+
+    public Task<StorageSpace> GetSpaceAsync(string path, CancellationToken cancellationToken)
+    {
+        Fail();
+
+        return Task.FromResult(Space);
     }
 
     public Task<Stream> OpenReadAsync(string path, long offset, long? count, CancellationToken cancellationToken)
