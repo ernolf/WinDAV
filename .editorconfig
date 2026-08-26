@@ -240,6 +240,11 @@ dotnet_diagnostic.CA1848.severity = suggestion
 # public surface; the analyzer cannot know that.
 dotnet_diagnostic.CA1515.severity = none
 
+# CA1303: a literal passed where a localized string is expected. There is no resource
+# table, because the program is not translated. Once it is, this line goes and the
+# reports it then makes are the list of what has to be moved.
+dotnet_diagnostic.CA1303.severity = none
+
 # == The WinFsp seam ==
 # Everything above holds here too. Relaxed only where the shape of the code is WinFsp's
 # to decide and not ours.
