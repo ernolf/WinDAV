@@ -50,4 +50,28 @@ public sealed class MountSettings
     /// the registry.
     /// </remarks>
     public string VolumeLabel { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Gets the name Explorer shows beside the drive letter, or <see langword="null"/> to
+    /// leave whatever Windows made of the network name.
+    /// </summary>
+    /// <remarks>
+    /// This is the other name, the one that comes from the registry rather than from the
+    /// volume. Windows builds one of its own out of the network name, and it reads
+    /// <c>ernolf (\\global-social.net)</c> where a person would have written
+    /// <c>ernolf@global-social.net</c>.
+    /// </remarks>
+    public string? ExplorerName { get; init; }
+
+    /// <summary>
+    /// Gets the file the drive icon is taken from, or <see langword="null"/> for the icon
+    /// Windows gives a network drive.
+    /// </summary>
+    /// <remarks>
+    /// An <c>.ico</c>, or anything else that carries icons; the first one in the file is
+    /// used. Leaving it out is not merely doing nothing: an icon written for an earlier
+    /// choice is taken away again, so that whoever wants the ordinary icon has nothing of
+    /// ours left in their registry.
+    /// </remarks>
+    public string? IconPath { get; init; }
 }

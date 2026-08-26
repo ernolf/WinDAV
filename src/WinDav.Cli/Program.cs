@@ -124,6 +124,8 @@ internal static class Program
               --path <path>        What becomes the root of the drive. Default: the whole account.
               --mount <X:|folder>  A drive letter, or an empty folder. Default: the next free letter.
               --label <text>       What the volume calls itself. Default: <user>@<server>, or the folder.
+              --name <text>        What Explorer shows beside the drive letter. Default: the label.
+              --icon <file>        The drive icon, from an .ico. Default: the one for a network drive.
               --prefix <name>      The network name, as \\server\share. Default: \\<server>\<user>.
               --local              Appear as a local disk instead of as a network drive.
 

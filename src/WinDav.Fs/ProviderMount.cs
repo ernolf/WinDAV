@@ -23,8 +23,21 @@ namespace WinDav.Fs;
 /// </remarks>
 public sealed class ProviderMount : IDisposable
 {
+    // Explorer keeps the name and the icon of a drive in two caches of its own and fills them
+    // when it sees fit, so both have to be written again whenever something takes them away.
+    // Five seconds is under what a person notices and costs a registry read when there is
+    // nothing to do.
+    private static readonly TimeSpan s_tickInterval = TimeSpan.FromSeconds(5);
+
     private readonly FileSystemHost _host;
     private readonly MountSettings _settings;
+
+    // Held while the branding is written or taken away, because the tick runs on a thread of
+    // the pool and disposing is what it races with.
+    private readonly Lock _gate = new();
+
+    private MountBranding? _branding;
+    private Timer? _tick;
     private bool _disposed;
 
     /// <summary>
@@ -78,6 +91,14 @@ public sealed class ProviderMount : IDisposable
         // rather than halfway through building a file system.
         Check(_host.Preflight(_settings.MountPoint));
         Check(_host.Mount(_settings.MountPoint));
+
+        // Not before: the drive letter an icon hangs on is the one Windows settled on, and a
+        // mount that asked for the next free letter does not know it until it has it.
+        _branding = new MountBranding(_settings, _host.MountPoint());
+
+        _branding.Ensure();
+
+        _tick = new Timer(_ => Tick(), null, s_tickInterval, s_tickInterval);
     }
 
     /// <summary>
@@ -93,9 +114,28 @@ public sealed class ProviderMount : IDisposable
 
         _disposed = true;
 
+        _tick?.Dispose();
+
+        // Before the volume goes, while the drive letter is still this mount's. A tick that
+        // was already running holds the gate, so what it writes is taken away and not the
+        // other way round.
+        lock (_gate)
+        {
+            _branding?.Remove();
+            _branding = null;
+        }
+
         _host.Dispose();
 
         GC.SuppressFinalize(this);
+    }
+
+    private void Tick()
+    {
+        lock (_gate)
+        {
+            _branding?.Ensure();
+        }
     }
 
     private static void Check(int status)
