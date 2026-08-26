@@ -101,6 +101,21 @@ public sealed class DavResourceTests
         Assert.Equal(TimeSpan.Zero, created?.Offset);
     }
 
+    [Theory]
+    [InlineData("1970-01-01T00:00:00Z")]
+    [InlineData("1970-01-01T01:00:00+01:00")]
+    public void FromResponseReportsACreationDateOnTheEpochAsAbsent(string written)
+    {
+        // What a store writes when it has no creation time and the property still has to
+        // carry a date. Nextcloud does it for every file.
+        string listing = Listing.Replace(
+            "<d:creationdate>2026-08-11T09:29:00Z</d:creationdate>",
+            $"<d:creationdate>{written}</d:creationdate>",
+            StringComparison.Ordinal);
+
+        Assert.Null(Read(listing, 1).CreationDate);
+    }
+
     [Fact]
     public void FromResponseKeepsTheQuotesOfTheETag() =>
         Assert.Equal("\"5f2a1b3c4d5e6\"", Read(Listing, 1).ETag);
