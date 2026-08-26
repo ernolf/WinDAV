@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 using System.Buffers;
+using System.Globalization;
 using System.Net;
 using System.Xml.Linq;
 using WinDav.Abstractions;
@@ -28,6 +29,11 @@ namespace WinDav.Dav;
 /// </remarks>
 public abstract class DavStorageProvider : IStorageProvider
 {
+    // The two of RFC 4331, asked for by name. They are live properties a server works out on
+    // request, so naming them keeps the question to what is being asked and keeps the answer
+    // free of a whole listing's worth of properties nobody wants here.
+    private static readonly XName[] s_space = [DavNames.QuotaAvailableBytes, DavNames.QuotaUsedBytes];
+
     /// <summary>
     /// Initialises a new instance of the <see cref="DavStorageProvider"/> class.
     /// </summary>
@@ -265,6 +271,27 @@ public abstract class DavStorageProvider : IStorageProvider
         }
     }
 
+    /// <inheritdoc/>
+    public async Task<StorageSpace> GetSpaceAsync(string path, CancellationToken cancellationToken = default)
+    {
+        Uri uri = DavPath.ToCollectionUri(BaseUri, path);
+        string what = $"Asking after the room in {DavPath.Normalise(path)}";
+
+        IReadOnlyList<DavResource> resources = await PropFindAsync(uri, DavDepth.Zero, s_space, what, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (resources.Count == 0)
+        {
+            throw new ProviderException(ProviderError.Protocol, $"{what} returned a multistatus without a response.");
+        }
+
+        return new StorageSpace
+        {
+            Used = ReadBytes(resources[0], DavNames.QuotaUsedBytes),
+            Available = ReadBytes(resources[0], DavNames.QuotaAvailableBytes),
+        };
+    }
+
     /// <summary>
     /// Turns a failed request into the exception the seam raises.
     /// </summary>
@@ -353,16 +380,36 @@ public abstract class DavStorageProvider : IStorageProvider
     /// <param name="what">What was being attempted, for the message.</param>
     /// <param name="cancellationToken">Cancels the request.</param>
     /// <returns>One entry per resource the server described.</returns>
+    protected Task<IReadOnlyList<DavResource>> PropFindAsync(
+        Uri uri,
+        DavDepth depth,
+        string what,
+        CancellationToken cancellationToken) =>
+        PropFindAsync(uri, depth, RequestedProperties, what, cancellationToken);
+
+    /// <summary>
+    /// Asks the server for named properties of a resource, for a question that is not the one
+    /// <see cref="RequestedProperties"/> answers.
+    /// </summary>
+    /// <param name="uri">The resource to ask about.</param>
+    /// <param name="depth">How far the question reaches.</param>
+    /// <param name="properties">
+    /// The properties to ask for, or <see langword="null"/> to ask for all of them.
+    /// </param>
+    /// <param name="what">What was being attempted, for the message.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>One entry per resource the server described.</returns>
     protected async Task<IReadOnlyList<DavResource>> PropFindAsync(
         Uri uri,
         DavDepth depth,
+        IReadOnlyList<XName>? properties,
         string what,
         CancellationToken cancellationToken)
     {
         try
         {
             return await Client
-                .PropFindAsync(uri, depth, RequestedProperties, cancellationToken)
+                .PropFindAsync(uri, depth, properties, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (HttpRequestException exception)
@@ -373,6 +420,22 @@ public abstract class DavStorageProvider : IStorageProvider
         {
             throw new ProviderException(ProviderError.Protocol, $"{what} returned a body that is not a multistatus.", exception);
         }
+    }
+
+    // RFC 4331 states both figures as a number of bytes, and a number of bytes is never
+    // negative. Nextcloud nevertheless answers -1, -2 or -3 for a quota it has not worked
+    // out, does not know, or does not impose. None of the three is an amount, so all of them
+    // are read as the silence they stand for, along with anything that is no number at all.
+    private static long? ReadBytes(DavResource resource, XName name)
+    {
+        if (!resource.Properties.TryGetValue(name, out XElement? element))
+        {
+            return null;
+        }
+
+        bool read = long.TryParse(element.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long bytes);
+
+        return read && bytes >= 0 ? bytes : null;
     }
 
     private static async Task SkipAsync(Stream stream, long count, CancellationToken cancellationToken)

@@ -152,4 +152,22 @@ public interface IStorageProvider
         string destinationPath,
         bool overwrite = false,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Asks how much room the store has.
+    /// </summary>
+    /// <param name="path">
+    /// The directory the question is about. A store that keeps one figure for the whole
+    /// account answers the same for every path; one that keeps a figure per directory
+    /// answers for that directory.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>
+    /// What the store said, with anything it did not state left absent. A store that keeps
+    /// no such figures at all answers with both absent; that is not a failure.
+    /// </returns>
+    /// <exception cref="ProviderException">
+    /// <see cref="ProviderError.NotFound"/> when there is no such directory.
+    /// </exception>
+    Task<StorageSpace> GetSpaceAsync(string path, CancellationToken cancellationToken = default);
 }

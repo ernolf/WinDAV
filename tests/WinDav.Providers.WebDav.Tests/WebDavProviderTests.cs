@@ -51,6 +51,23 @@ public sealed class WebDavProviderTests
         </d:multistatus>
         """;
 
+    // What RFC 4331 adds, on the collection the two properties belong to.
+    private const string Quota = """
+        <?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/remote.php/dav/files/ernolf/</d:href>
+            <d:propstat>
+              <d:prop>
+                <d:quota-used-bytes>3000</d:quota-used-bytes>
+                <d:quota-available-bytes>7000</d:quota-available-bytes>
+              </d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+        </d:multistatus>
+        """;
+
     [Fact]
     public async Task ListAsyncLeavesOutTheCollectionItself()
     {
@@ -200,6 +217,71 @@ public sealed class WebDavProviderTests
         Assert.Equal("0", handler.Depth);
         Assert.Equal("/", entry.Path);
         Assert.True(entry.IsDirectory);
+    }
+
+    [Fact]
+    public async Task GetSpaceAsyncReadsBothFiguresAndAsksForThemByName()
+    {
+        RecordingHandler handler = new(MultiStatus(Quota));
+        using HttpClient httpClient = new(handler);
+
+        StorageSpace space = await Provider(httpClient).GetSpaceAsync("/", TestContext.Current.CancellationToken);
+
+        Assert.Equal(3000L, space.Used);
+        Assert.Equal(7000L, space.Available);
+        Assert.Equal("0", handler.Depth);
+
+        // Named rather than left to allprop: both are worked out on request, and this is the
+        // one question that wants them and nothing else.
+        XElement prop = XDocument.Parse(handler.Body!).Root!.Element(DavNames.Prop)!;
+
+        Assert.NotNull(prop.Element(DavNames.QuotaUsedBytes));
+        Assert.NotNull(prop.Element(DavNames.QuotaAvailableBytes));
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("-2")]
+    [InlineData("-3")]
+    [InlineData("plenty")]
+    public async Task AnAmountThatIsNoAmountIsReadAsSilence(string written)
+    {
+        // Nextcloud answers the three negatives for a quota it has not worked out, does not
+        // know, or does not impose. None of them is a number of bytes.
+        string body = Quota.Replace("7000", written, StringComparison.Ordinal);
+        using HttpClient httpClient = new(new RecordingHandler(MultiStatus(body)));
+
+        StorageSpace space = await Provider(httpClient).GetSpaceAsync("/", TestContext.Current.CancellationToken);
+
+        Assert.Null(space.Available);
+        Assert.Equal(3000L, space.Used);
+    }
+
+    [Fact]
+    public async Task AServerThatKeepsNoSuchFigureIsNotAFailure()
+    {
+        const string NoQuota = """
+            <?xml version="1.0"?>
+            <d:multistatus xmlns:d="DAV:">
+              <d:response>
+                <d:href>/remote.php/dav/files/ernolf/</d:href>
+                <d:propstat>
+                  <d:prop>
+                    <d:quota-used-bytes/>
+                    <d:quota-available-bytes/>
+                  </d:prop>
+                  <d:status>HTTP/1.1 404 Not Found</d:status>
+                </d:propstat>
+              </d:response>
+            </d:multistatus>
+            """;
+
+        using HttpClient httpClient = new(new RecordingHandler(MultiStatus(NoQuota)));
+
+        StorageSpace space = await Provider(httpClient).GetSpaceAsync("/", TestContext.Current.CancellationToken);
+
+        Assert.Null(space.Used);
+        Assert.Null(space.Available);
     }
 
     [Fact]

@@ -44,16 +44,23 @@ public sealed class WinDavFileSystem : FileSystemBase
     private const ushort MaxComponentLength = 255;
     private const ulong AllocationUnit = SectorSize * SectorsPerAllocationUnit;
 
-    // A size has to be named and Windows shows it, but the seam has no call that asks a
-    // store how much room it has. Until it does, this is a figure and not a measurement,
-    // and it is deliberately large enough that nothing looks nearly full.
-    private const ulong Capacity = 1UL << 40;
+    // What a store with no limit is shown as having left. Windows insists on a number, an
+    // account without a quota has none, and this one is deliberately large enough that
+    // nothing ever looks nearly full. It is room on top of what is in use and never the
+    // whole volume, so a real figure for what is used is still shown beside it.
+    private const ulong Headroom = 1UL << 40;
 
     // How long WinFsp may reuse what it was last told about an entry. Every miss is a
     // request over the network, and the Explorer asks for the same entry several times
     // while drawing one window. A second is short enough that a change on the server shows
     // up while somebody is still looking at the window.
     private const uint FileInfoTimeoutMilliseconds = 1000;
+
+    // The same for the volume, which is a question of its own since it costs a request of
+    // its own. Windows asks it whenever a window is drawn and before it starts a copy, and
+    // the answer changes at the pace files are written, so ten seconds is both cheap and
+    // soon enough to watch a large upload eat into a quota.
+    private const uint VolumeInfoTimeoutMilliseconds = 10000;
 
     private const int TransferBufferSize = 64 * 1024;
 
@@ -105,6 +112,7 @@ public sealed class WinDavFileSystem : FileSystemBase
         fileSystemHost.VolumeSerialNumber = (uint)(_mountTime / TimeSpan.TicksPerSecond);
         fileSystemHost.FileSystemName = ProductInfo.Name;
         fileSystemHost.FileInfoTimeout = FileInfoTimeoutMilliseconds;
+        fileSystemHost.VolumeInfoTimeout = VolumeInfoTimeoutMilliseconds;
 
         // What a WebDAV server is: names keep their case, and two names that differ only in
         // case are the same name.
@@ -128,9 +136,19 @@ public sealed class WinDavFileSystem : FileSystemBase
     /// <inheritdoc/>
     public override int GetVolumeInfo(out VolumeInfo volumeInfo)
     {
+        StorageSpace space = SpaceOfTheVolume();
+
+        // What is left is what the store said, or the headroom when it said nothing. What
+        // the volume holds altogether is that plus what is already in it, which for an
+        // account with a quota is the quota itself and for one without is a number that
+        // grows with the files. Neither figure is ever worked out from the other, because
+        // the one that is missing is missing and not zero.
+        ulong free = space.Available is long available ? (ulong)available : Headroom;
+        ulong used = space.Used is long inUse ? (ulong)inUse : 0;
+
         volumeInfo = default;
-        volumeInfo.TotalSize = Capacity;
-        volumeInfo.FreeSize = Capacity;
+        volumeInfo.TotalSize = free + used;
+        volumeInfo.FreeSize = free;
         volumeInfo.SetVolumeLabel(_settings.VolumeLabel);
 
         return STATUS_SUCCESS;
@@ -554,6 +572,23 @@ public sealed class WinDavFileSystem : FileSystemBase
         finally
         {
             ArrayPool<byte>.Shared.Return(chunk);
+        }
+    }
+
+    private StorageSpace SpaceOfTheVolume()
+    {
+        try
+        {
+            return Await(_provider.GetSpaceAsync(ToRemotePath(RemoteRoot)));
+        }
+        catch (ProviderException)
+        {
+            // Windows asks this while it is drawing a window and while it is deciding
+            // whether a copy will fit, and neither is a place to fail: a drive that answers
+            // its size with an error is a drive that looks broken. A server that cannot be
+            // reached leaves the volume shown with its headroom, and the next question,
+            // which is due within seconds, asks again.
+            return StorageSpace.Unknown;
         }
     }
 
