@@ -64,7 +64,8 @@ public sealed class DavResource
 
     /// <summary>
     /// Gets the time the resource came into being, in UTC, or <see langword="null"/> when
-    /// the server did not state one.
+    /// the server did not state one. A server that names the Unix epoch has not stated one
+    /// either, and is reported the same way.
     /// </summary>
     public DateTimeOffset? CreationDate { get; }
 
@@ -158,13 +159,20 @@ public sealed class DavResource
             return null;
         }
 
-        return DateTimeOffset.TryParse(
+        if (!DateTimeOffset.TryParse(
             text,
             CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-            out DateTimeOffset created)
-            ? created
-            : null;
+            out DateTimeOffset created))
+        {
+            return null;
+        }
+
+        // A store that has no creation time and has to name one names the epoch: it is what
+        // a zero turns into. Nextcloud does this for every file. Read as a date it is the
+        // first of January 1970, which is not when the file was made, so it is read as the
+        // silence it is and whoever needs a time can put one of their own in its place.
+        return created == DateTimeOffset.UnixEpoch ? null : created;
     }
 
     private static string? ReadText(IReadOnlyDictionary<XName, XElement> properties, XName name)
