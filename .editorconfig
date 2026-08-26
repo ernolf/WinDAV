@@ -240,6 +240,27 @@ dotnet_diagnostic.CA1848.severity = suggestion
 # public surface; the analyzer cannot know that.
 dotnet_diagnostic.CA1515.severity = none
 
+# == The WinFsp seam ==
+# Everything above holds here too. Relaxed only where the shape of the code is WinFsp's
+# to decide and not ours.
+
+# The `**` stands alone here: `**/*.cs` requires a directory between it and the file,
+# and the sources of this project sit directly in its folder.
+[src/WinDav.Fs/**.cs]
+
+# CA1725: a parameter has to be named as the base declaration names it. WinFsp's binding
+# is written in PascalCase throughout, and the naming rules above are at error for the
+# whole codebase. One of the two has to give, and it is not the codebase.
+dotnet_diagnostic.CA1725.severity = none
+
+[src/WinDav.Fs/WinDavFileSystem.cs]
+
+# CA1062: the arguments of a public method have to be checked for null. These arrive from
+# the WinFsp driver rather than from a caller in this process, so a guard against a null
+# it cannot pass is a line that can never run. The constructor, which a caller does reach,
+# checks both of its arguments.
+dotnet_diagnostic.CA1062.severity = none
+
 # == Tests ==
 # Everything above holds here too; only what a test project legitimately does
 # differently is relaxed, and only here.
