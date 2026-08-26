@@ -10,6 +10,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Nothing here is meant to be called from elsewhere, so nothing here is public. The
+         tests reach the argument handling the same way the program does. -->
+    <InternalsVisibleTo Include="WinDav.Cli.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\WinDav.Core\WinDav.Core.csproj" />
     <ProjectReference Include="..\WinDav.Fs\WinDav.Fs.csproj" />
     <ProjectReference Include="..\WinDav.Providers.Nextcloud\WinDav.Providers.Nextcloud.csproj" />

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Follows the project under test, which is Windows-only. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- Test names document themselves; XML doc comments on them would be noise. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- xunit.v3 builds the test project into its own executable. -->
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\WinDav.Cli\WinDav.Cli.csproj" />
+  </ItemGroup>
+
+</Project>
