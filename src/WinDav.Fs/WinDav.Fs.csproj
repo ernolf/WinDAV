@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="winfsp.net" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\WinDav.Abstractions\WinDav.Abstractions.csproj" />
     <ProjectReference Include="..\WinDav.Core\WinDav.Core.csproj" />
   </ItemGroup>
