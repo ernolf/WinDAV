@@ -76,6 +76,7 @@ public sealed class AccountConnector
         {
             Server = account.Server,
             UserId = account.UserId,
+            LoginId = account.LoginId,
             Secret = secret,
             RemotePath = mount.RemotePath,
             UserAgent = UserAgent,
@@ -103,7 +104,8 @@ public sealed class AccountConnector
     {
         foreach (AccountConfiguration account in configuration.Accounts)
         {
-            if (string.Equals(account.Id, mount.Account, StringComparison.OrdinalIgnoreCase))
+            // By identity, not by name: decisions.md 71.
+            if (string.Equals(account.Uuid.ToString(), mount.Account, StringComparison.OrdinalIgnoreCase))
             {
                 return account;
             }

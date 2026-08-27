@@ -35,10 +35,18 @@ public static class SettingCatalogue
         },
         new()
         {
+            Path = "accounts[].uuid",
+            Summary = "What this account is, as opposed to what it is called.",
+            Effect = "A mount points at it, so that renaming an account leaves every mount of it standing. It can be given wherever an account is named on the command line.",
+            DefaultValue = "none, it is made when the account is added",
+            AllowedValues = "a UUID, unique among the accounts",
+        },
+        new()
+        {
             Path = "accounts[].id",
             Summary = "The name this account is referred to by.",
-            Effect = "A mount names it here. Changing it means changing every mount that uses it.",
-            DefaultValue = "none, it has to be given",
+            Effect = "How the account is named on the command line. Changing it changes nothing else.",
+            DefaultValue = "the login and the server's host, as login@host",
             AllowedValues = "any text, unique among the accounts and compared without regard to case",
         },
         new()
@@ -59,16 +67,32 @@ public static class SettingCatalogue
         new()
         {
             Path = "accounts[].userId",
-            Summary = "The user as the server knows them, which is the one in the path rather than the display name.",
+            Summary = "The user as the server knows them, which is not the display name.",
             Effect = "Completes the path a provider builds its file tree from.",
             DefaultValue = "null",
         },
         new()
         {
+            Path = "accounts[].loginId",
+            Summary = "The name the credential is presented under.",
+            Effect = "Goes into the authentication. A server that issued the password for one spelling of a user turns it down under another.",
+            DefaultValue = "null, which means the same as userId",
+        },
+        new()
+        {
             Path = "accounts[].secretRef",
-            Summary = "The name the credential is stored under.",
+            Summary = "The key the credential is stored under.",
             Effect = "Points at the credential. The credential itself is never written to this file.",
             DefaultValue = "null",
+            AllowedValues = "a key of the program's own making, which is not the id of the account",
+        },
+        new()
+        {
+            Path = "accounts[].issuedHere",
+            Summary = "Whether the server handed out the credential rather than a person typing it in.",
+            Effect = "Removing the account withdraws such a credential on the server without asking. One that was typed in is asked about first.",
+            DefaultValue = "false",
+            AllowedValues = "true or false",
         },
         new()
         {
@@ -88,10 +112,10 @@ public static class SettingCatalogue
         new()
         {
             Path = "mounts[].account",
-            Summary = "The id of the account this mount reaches.",
-            Effect = "Ties the mount to a server and a user.",
+            Summary = "The account this mount reaches, named by its uuid rather than by its id.",
+            Effect = "Ties the mount to a server and a user, and holds through a rename of the account.",
             DefaultValue = "none, it has to be given",
-            AllowedValues = "the id of an account in this file",
+            AllowedValues = "the uuid of an account in this file",
         },
         new()
         {

@@ -101,6 +101,15 @@ public sealed class CommandLineTests
                 .SingleArgument("an address"));
 
     [Fact]
+    public void AVerbWithAPartToItKeepsThePartAndWhatFollowsIt()
+    {
+        CommandLine line = Parse("account", "add", "https://cloud.example.com", "--user", "alice");
+
+        Assert.Equal("account", line.Verb);
+        Assert.Equal(["add", "https://cloud.example.com"], line.Arguments);
+    }
+
+    [Fact]
     public void AnEmptyCommandLineAsksForNothing()
     {
         CommandLine line = Parse();

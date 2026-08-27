@@ -53,6 +53,18 @@ public static class ProductInfo
     /// </remarks>
     public static string ConfigurationDirectory { get; } = ReadConfigurationDirectory();
 
+    /// <summary>
+    /// Gets the directory for what belongs to this machine alone: the credentials of the
+    /// file-backed secret store, and later the cache.
+    /// </summary>
+    /// <remarks>
+    /// The local application data directory with <see cref="Slug"/> below it, and without an
+    /// override on purpose. What is kept here cannot be read on another machine, so a path
+    /// that pointed into a roaming profile would only make it look as though it could.
+    /// </remarks>
+    public static string LocalDataDirectory { get; } =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Slug);
+
     private static string Metadata(string key)
     {
         foreach (AssemblyMetadataAttribute attribute in s_assembly.GetCustomAttributes<AssemblyMetadataAttribute>())

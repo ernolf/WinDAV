@@ -36,6 +36,16 @@ internal sealed class CommandLine
     internal string? Verb { get; private set; }
 
     /// <summary>
+    /// Gets everything written after the verb that is not an option, in the order it was
+    /// written.
+    /// </summary>
+    /// <remarks>
+    /// A verb with parts to it, as in <c>account add</c>, reads the part from here. What a
+    /// command with one argument wants is <see cref="SingleArgument"/>.
+    /// </remarks>
+    internal IReadOnlyList<string> Arguments => _arguments;
+
+    /// <summary>
     /// Takes a command line apart.
     /// </summary>
     /// <param name="tokens">What the shell handed over.</param>

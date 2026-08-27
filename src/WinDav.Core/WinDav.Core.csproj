@@ -4,6 +4,10 @@
        why it does not reference WinDav.Dav. -->
 
   <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\WinDav.Abstractions\WinDav.Abstractions.csproj" />
   </ItemGroup>
 

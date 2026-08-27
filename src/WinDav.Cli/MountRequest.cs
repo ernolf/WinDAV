@@ -95,7 +95,7 @@ internal sealed class MountRequest
 
         line.EnsureOnlyKnown(s_options);
 
-        Uri server = ReadServer(line.SingleArgument("the address of a server"));
+        Uri server = ServerAddress.Read(line.SingleArgument("the address of a server"));
         bool anonymous = line.Flag("--anonymous");
         string? userId = line.Value("--user");
 
@@ -131,18 +131,6 @@ internal sealed class MountRequest
             NetworkPrefix = local ? null : prefix ?? DerivePrefix(server, userId, remotePath),
             NeedsSecret = !anonymous,
         };
-    }
-
-    private static Uri ReadServer(string address)
-    {
-        if (!Uri.TryCreate(address, UriKind.Absolute, out Uri? server)
-            || (!string.Equals(server.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal)
-                && !string.Equals(server.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal)))
-        {
-            throw new UsageException($"'{address}' is not an http or https address.");
-        }
-
-        return server;
     }
 
     private static string ReadPath(string? path)

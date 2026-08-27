@@ -60,6 +60,18 @@ internal static class Program
         {
             return WriteFailure(Describe(failure));
         }
+        catch (InvalidOperationException unopenable)
+        {
+            // A credential that is where it belongs and cannot be opened, which is what one
+            // written by another user or carried over from another machine looks like.
+            return WriteFailure(unopenable.Message);
+        }
+        catch (TimeoutException expired)
+        {
+            // A login that was begun in the browser and not granted. The token the server
+            // handed out is gone with it, and there is nothing to carry on from.
+            return WriteFailure(expired.Message);
+        }
         catch (Win32Exception refused)
         {
             // Windows turned the mount down, and says why better than we could.
@@ -98,6 +110,11 @@ internal static class Program
             return Success;
         }
 
+        if (string.Equals(line.Verb, "account", StringComparison.Ordinal))
+        {
+            return await AccountCommand.RunAsync(line, cancellationToken).ConfigureAwait(false);
+        }
+
         if (string.Equals(line.Verb, "mount", StringComparison.Ordinal))
         {
             return await MountCommand.RunAsync(line, cancellationToken).ConfigureAwait(false);
@@ -113,9 +130,19 @@ internal static class Program
             {ProductInfo.Name} {ProductInfo.Version}
 
             Usage:
+              {ProductInfo.Slug} account add <url> [options]
+              {ProductInfo.Slug} account list
+              {ProductInfo.Slug} account remove <id|uuid>
               {ProductInfo.Slug} mount <url> [options]
               {ProductInfo.Slug} help
               {ProductInfo.Slug} --version
+
+            Options of account add:
+              --provider <name>    The kind of store: nextcloud (the default) or webdav.
+              --user <name>        The login name, to be asked for an app password instead of
+                                   logging in through the browser. Needed for webdav.
+              --anonymous          Reach the store without a credential, instead of --user.
+              --id <name>          What the account is called here. Default: <login>@<server>.
 
             Options of mount:
               --provider <name>    The kind of store: nextcloud (the default) or webdav.
@@ -129,6 +156,15 @@ internal static class Program
               --local              Appear as a local disk instead of as a network drive.
 
             The password is asked for, so that it stays out of the history of the shell.
+            An account is written to the configuration; its credential is kept apart from it,
+            encrypted for this user on this machine. Removing an account withdraws the password
+            its login was given, unless another account here is signed in with the same one; a
+            password that was typed in is withdrawn only if you say so.
+            A server that lets one user in under more than one name is reached under the name
+            the password was made for. Adding a second name for a user who is here already is
+            asked about, and what comes of it is a second account for the same files.
+            An account is named by its id or by its uuid, and account list shows both. The uuid
+            is what a mount in the configuration points at, so a rename leaves the mount alone.
             A mount lasts as long as the command runs, and Ctrl+C takes it away.
             Everything on it is read only in this version.
 

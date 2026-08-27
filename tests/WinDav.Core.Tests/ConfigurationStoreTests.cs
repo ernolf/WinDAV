@@ -11,6 +11,10 @@ namespace WinDav.Core.Tests;
 
 public sealed class ConfigurationStoreTests : IDisposable
 {
+    // Fixed rather than made on the spot, so that the mount below can name the account it
+    // belongs to and the test can say what it expects to read back.
+    private static readonly Guid s_account = new("0f2a6b41-6c1a-4c0e-9a6f-3b8d5e1c7a90");
+
     private readonly string _directory =
         Path.Combine(Path.GetTempPath(), $"{ProductInfo.Slug}-tests-{Guid.NewGuid():N}");
 
@@ -49,14 +53,17 @@ public sealed class ConfigurationStoreTests : IDisposable
         ClientConfiguration read = await _store.LoadAsync(TestContext.Current.CancellationToken);
 
         AccountConfiguration account = Assert.Single(read.Accounts);
-        Assert.Equal("home", account.Id);
+        Assert.Equal(s_account, account.Uuid);
+        Assert.Equal("ernolf@cloud.example.com", account.Id);
         Assert.Equal(new Uri("https://cloud.example.com/"), account.Server);
         Assert.Equal("nextcloud", account.Provider);
         Assert.Equal("ernolf", account.UserId);
+        Assert.Equal("ernolf@example.com", account.LoginId);
+        Assert.True(account.IssuedHere);
 
         MountConfiguration mount = Assert.Single(read.Mounts);
         Assert.Equal("files", mount.Id);
-        Assert.Equal("home", mount.Account);
+        Assert.Equal(s_account.ToString(), mount.Account);
         Assert.Equal("N", mount.DriveLetter);
         Assert.Null(mount.Directory);
         Assert.False(mount.ReadOnly);
@@ -175,11 +182,14 @@ public sealed class ConfigurationStoreTests : IDisposable
         [
             new AccountConfiguration
             {
-                Id = "home",
+                Uuid = s_account,
+                Id = "ernolf@cloud.example.com",
                 Server = new Uri("https://cloud.example.com/"),
                 Provider = "nextcloud",
                 UserId = "ernolf",
-                SecretRef = "home",
+                LoginId = "ernolf@example.com",
+                SecretRef = "a1b2c3d4",
+                IssuedHere = true,
             },
         ],
         Mounts =
@@ -187,7 +197,7 @@ public sealed class ConfigurationStoreTests : IDisposable
             new MountConfiguration
             {
                 Id = "files",
-                Account = "home",
+                Account = s_account.ToString(),
                 DriveLetter = "N",
             },
         ],

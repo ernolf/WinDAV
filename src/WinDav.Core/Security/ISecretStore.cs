@@ -8,9 +8,10 @@ namespace WinDav.Core.Security;
 /// </summary>
 /// <remarks>
 /// <para>
-/// A seam rather than an implementation, and deliberately so: the store worth having on
-/// Windows is the credential manager, and reaching it needs a Windows target framework,
-/// which this project does not have. The program that runs supplies one.
+/// A seam with more than one store behind it. <see cref="DpapiSecretStore"/> is what a
+/// plain installation uses; the credential manager is the second, for the profile that
+/// roams from one machine to the next. Which of them is used is a decision of the program
+/// that runs, and decisions.md 68 says why the file store is the one that came first.
 /// </para>
 /// <para>
 /// What a configuration holds is the reference — <see cref="Configuration.AccountConfiguration.SecretRef"/> —

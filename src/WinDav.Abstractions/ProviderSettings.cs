@@ -22,7 +22,22 @@ public sealed class ProviderSettings
     /// Gets the user as the store knows them, or <see langword="null"/> where the store has
     /// no notion of one.
     /// </summary>
+    /// <remarks>
+    /// The name the store itself uses, which for one that puts the user in the path is the
+    /// name in the path.
+    /// </remarks>
     public string? UserId { get; init; }
+
+    /// <summary>
+    /// Gets the name the credential is presented under, or <see langword="null"/> when it is
+    /// <see cref="UserId"/>.
+    /// </summary>
+    /// <remarks>
+    /// A store may let one user in under more than one name and accept a credential only
+    /// under the one it was issued for, which is a different question from what the user is
+    /// called. Where the store makes no such distinction, this stays empty.
+    /// </remarks>
+    public string? LoginId { get; init; }
 
     /// <summary>
     /// Gets the credential, or <see langword="null"/> for a store that is reached without

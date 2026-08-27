@@ -57,7 +57,11 @@ public abstract class DavProviderFactory : IStorageProviderFactory
 
             if (!string.IsNullOrEmpty(settings.Secret))
             {
-                httpClient.DefaultRequestHeaders.Authorization = Basic(settings.UserId, settings.Secret);
+                // The name the credential is accepted under, which is not always the name the
+                // store knows the user by. See decisions.md 71.
+                httpClient.DefaultRequestHeaders.Authorization = Basic(
+                    settings.LoginId ?? settings.UserId,
+                    settings.Secret);
             }
 
             return new DavConnection(httpClient, CreateProvider(new DavClient(httpClient), settings));
