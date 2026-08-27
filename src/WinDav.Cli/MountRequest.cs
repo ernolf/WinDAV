@@ -26,7 +26,6 @@ internal sealed class MountRequest
         "--path",
         "--mount",
         "--label",
-        "--name",
         "--icon",
         "--prefix",
         "--local",
@@ -63,14 +62,9 @@ internal sealed class MountRequest
     internal required string? MountPoint { get; init; }
 
     /// <summary>
-    /// Gets the name the volume answers with.
+    /// Gets what the drive is called, which the volume answers with and Explorer shows.
     /// </summary>
     internal required string Label { get; init; }
-
-    /// <summary>
-    /// Gets the name Explorer shows beside the drive letter.
-    /// </summary>
-    internal required string ExplorerName { get; init; }
 
     /// <summary>
     /// Gets the file the drive icon is taken from, as a full path, or <see langword="null"/>
@@ -125,8 +119,6 @@ internal sealed class MountRequest
             throw new UsageException("A mount that appears as a local disk has no network name.");
         }
 
-        string label = line.Value("--label") ?? DeriveLabel(server, userId, remotePath);
-
         return new MountRequest
         {
             Provider = line.Value("--provider") ?? NextcloudProviderFactory.ProviderName,
@@ -134,8 +126,7 @@ internal sealed class MountRequest
             UserId = userId,
             RemotePath = remotePath,
             MountPoint = line.Value("--mount"),
-            Label = label,
-            ExplorerName = line.Value("--name") ?? label,
+            Label = line.Value("--label") ?? DeriveLabel(server, userId, remotePath),
             IconPath = ReadIcon(line.Value("--icon")),
             NetworkPrefix = local ? null : prefix ?? DerivePrefix(server, userId, remotePath),
             NeedsSecret = !anonymous,

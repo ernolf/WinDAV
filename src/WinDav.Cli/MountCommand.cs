@@ -70,7 +70,7 @@ internal static class MountCommand
                 MountPoint = request.MountPoint,
                 NetworkPrefix = request.NetworkPrefix,
                 VolumeLabel = request.Label,
-                ExplorerName = request.ExplorerName,
+                ExplorerName = request.Label,
                 IconPath = request.IconPath,
             });
 

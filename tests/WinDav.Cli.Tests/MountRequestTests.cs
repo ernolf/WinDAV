@@ -51,16 +51,6 @@ public sealed class MountRequestTests
         Assert.Equal("X:", request.MountPoint);
     }
 
-    // The two names are separate things, and the one Explorer shows follows the one the
-    // volume answers with until somebody says otherwise.
-    [Fact]
-    public void WhatExplorerShowsIsTheLabelUnlessItIsGivenItsOwnName()
-    {
-        Assert.Equal("alice@cloud.example.com", Read("--user", "alice").ExplorerName);
-        Assert.Equal("Work drive", Read("--user", "alice", "--label", "Work drive").ExplorerName);
-        Assert.Equal("Work", Read("--user", "alice", "--label", "Work drive", "--name", "Work").ExplorerName);
-    }
-
     [Fact]
     public void WithoutAnIconThereIsNoneToWrite() => Assert.Null(Read("--user", "alice").IconPath);
 
