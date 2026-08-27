@@ -4,6 +4,11 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
+
+    <!-- Not for code of ours. The LibraryImport generator always emits its marshalling stub
+         as unsafe, even for a signature that has nothing to marshal, so a project that calls
+         into Windows at all has to allow it (SYSLIB1062). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

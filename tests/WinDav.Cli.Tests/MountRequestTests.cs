@@ -51,6 +51,45 @@ public sealed class MountRequestTests
         Assert.Equal("X:", request.MountPoint);
     }
 
+    // The two names are separate things, and the one Explorer shows follows the one the
+    // volume answers with until somebody says otherwise.
+    [Fact]
+    public void WhatExplorerShowsIsTheLabelUnlessItIsGivenItsOwnName()
+    {
+        Assert.Equal("alice@cloud.example.com", Read("--user", "alice").ExplorerName);
+        Assert.Equal("Work drive", Read("--user", "alice", "--label", "Work drive").ExplorerName);
+        Assert.Equal("Work", Read("--user", "alice", "--label", "Work drive", "--name", "Work").ExplorerName);
+    }
+
+    [Fact]
+    public void WithoutAnIconThereIsNoneToWrite() => Assert.Null(Read("--user", "alice").IconPath);
+
+    // The registry keeps the path and is read again long after the directory the command ran
+    // in has stopped mattering.
+    [Fact]
+    public void AnIconIsKeptAsAFullPath()
+    {
+        // Written where the command would be run, so that the bare name is one that resolves.
+        string name = $"windav-tests-{Guid.NewGuid():N}.ico";
+
+        File.WriteAllBytes(name, []);
+
+        try
+        {
+            MountRequest request = Read("--user", "alice", "--icon", name);
+
+            Assert.Equal(Path.Combine(Directory.GetCurrentDirectory(), name), request.IconPath);
+        }
+        finally
+        {
+            File.Delete(name);
+        }
+    }
+
+    [Fact]
+    public void AnIconThatIsNotThereIsSaidSoAtOnce() =>
+        Assert.Throws<UsageException>(() => Read("--user", "alice", "--icon", "no-such-file.ico"));
+
     [Fact]
     public void ANetworkNameIsKeptInTheFormAMountCarriesIt()
     {

@@ -19,7 +19,18 @@ internal sealed class MountRequest
     private const string RootPath = "/";
 
     private static readonly string[] s_options =
-        ["--provider", "--user", "--anonymous", "--path", "--mount", "--label", "--prefix", "--local"];
+    [
+        "--provider",
+        "--user",
+        "--anonymous",
+        "--path",
+        "--mount",
+        "--label",
+        "--name",
+        "--icon",
+        "--prefix",
+        "--local",
+    ];
 
     private MountRequest()
     {
@@ -55,6 +66,17 @@ internal sealed class MountRequest
     /// Gets the name the volume answers with.
     /// </summary>
     internal required string Label { get; init; }
+
+    /// <summary>
+    /// Gets the name Explorer shows beside the drive letter.
+    /// </summary>
+    internal required string ExplorerName { get; init; }
+
+    /// <summary>
+    /// Gets the file the drive icon is taken from, as a full path, or <see langword="null"/>
+    /// for the icon Windows gives a network drive.
+    /// </summary>
+    internal required string? IconPath { get; init; }
 
     /// <summary>
     /// Gets the network name in the form <c>\Server\Share</c>, or <see langword="null"/> for a
@@ -103,6 +125,8 @@ internal sealed class MountRequest
             throw new UsageException("A mount that appears as a local disk has no network name.");
         }
 
+        string label = line.Value("--label") ?? DeriveLabel(server, userId, remotePath);
+
         return new MountRequest
         {
             Provider = line.Value("--provider") ?? NextcloudProviderFactory.ProviderName,
@@ -110,7 +134,9 @@ internal sealed class MountRequest
             UserId = userId,
             RemotePath = remotePath,
             MountPoint = line.Value("--mount"),
-            Label = line.Value("--label") ?? DeriveLabel(server, userId, remotePath),
+            Label = label,
+            ExplorerName = line.Value("--name") ?? label,
+            IconPath = ReadIcon(line.Value("--icon")),
             NetworkPrefix = local ? null : prefix ?? DerivePrefix(server, userId, remotePath),
             NeedsSecret = !anonymous,
         };
@@ -140,6 +166,25 @@ internal sealed class MountRequest
         string written = path.Trim().Replace('\\', '/').TrimEnd('/');
 
         return written.StartsWith('/') ? written : RootPath + written;
+    }
+
+    private static string? ReadIcon(string? icon)
+    {
+        if (string.IsNullOrWhiteSpace(icon))
+        {
+            return null;
+        }
+
+        // Written as a full path, because the registry keeps it and is read again long after
+        // whatever directory the command ran in has stopped mattering.
+        string path = Path.GetFullPath(icon.Trim());
+
+        if (!File.Exists(path))
+        {
+            throw new UsageException($"There is no file at '{path}'.");
+        }
+
+        return path;
     }
 
     private static string? NormalisePrefix(string? prefix)
