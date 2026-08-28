@@ -4,14 +4,11 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
-using System.Net;
-using System.Net.Http.Headers;
 using System.Text;
 using WinDav.Abstractions;
 using WinDav.Core;
 using WinDav.Core.Configuration;
 using WinDav.Core.Security;
-using WinDav.Providers.Nextcloud;
 using WinDav.Providers.Nextcloud.Login;
 using WinDav.Providers.Nextcloud.Ocs;
 
@@ -99,8 +96,9 @@ internal static class AccountCommand
 
             // Decision 71: the name the file tree on the server is called after, which is a
             // different question from the name this login was accepted under.
-            userId = IsNextcloud(request.Provider)
-                ? await ResolveUserIdAsync(server, loginId, secret, cancellationToken).ConfigureAwait(false)
+            userId = NextcloudServer.IsNextcloud(request.Provider)
+                ? await NextcloudServer.ResolveUserIdAsync(server, loginId, secret, cancellationToken)
+                    .ConfigureAwait(false)
                 : loginId;
         }
 
@@ -232,7 +230,7 @@ internal static class AccountCommand
         ConfigurationStore configuration = ConfigurationStore.Default();
         ClientConfiguration client = await configuration.LoadAsync(cancellationToken).ConfigureAwait(false);
 
-        AccountConfiguration account = Find(client, asked)
+        AccountConfiguration account = client.FindAccount(asked)
             ?? throw new UsageException($"There is no account '{asked}', by that name or by that uuid.");
 
         EnsureUnused(client, account);
@@ -266,25 +264,6 @@ internal static class AccountCommand
     // program that runs is for, and this one has chosen. Decisions.md 68 says which and why.
     private static DpapiSecretStore Secrets() => DpapiSecretStore.Default();
 
-    private static bool IsNextcloud(string provider) =>
-        string.Equals(provider, NextcloudProviderFactory.ProviderName, StringComparison.Ordinal);
-
-    // Decision 71: by the name or by the identity, whichever was given. The name comes first
-    // because it is what a person types; the identity is what a script holds on to, since it
-    // is the one of the two that outlives a renaming.
-    private static AccountConfiguration? Find(ClientConfiguration client, string asked)
-    {
-        AccountConfiguration? named = client.Accounts.FirstOrDefault(account =>
-            string.Equals(account.Id, asked, StringComparison.OrdinalIgnoreCase));
-
-        if (named is not null || !Guid.TryParse(asked, out Guid uuid))
-        {
-            return named;
-        }
-
-        return client.Accounts.FirstOrDefault(account => account.Uuid == uuid);
-    }
-
     // Decision 71: the name this account authenticates as, which is the name it is known by
     // wherever the server draws no distinction between the two.
     private static string? LoginOf(AccountConfiguration account) => account.LoginId ?? account.UserId;
@@ -310,9 +289,9 @@ internal static class AccountCommand
 
     private static void EnsureFree(ClientConfiguration client, string? id)
     {
-        // Through Find, so that a name which happens to be another account's uuid is refused
-        // as well: it would reach that other account on the command line.
-        if (id is not null && Find(client, id) is not null)
+        // Through the same lookup the command line uses, so that a name which happens to be
+        // another account's uuid is refused as well: it would reach that other account.
+        if (id is not null && client.FindAccount(id) is not null)
         {
             throw new UsageException($"There is already an account named '{id}'. Another name goes in --id.");
         }
@@ -376,7 +355,7 @@ internal static class AccountCommand
 
     private static async Task<LoginFlowCredentials> LogInAsync(Uri server, CancellationToken cancellationToken)
     {
-        using HttpClient httpClient = Anonymous();
+        using HttpClient httpClient = NextcloudServer.Anonymous();
 
         LoginFlowClient login = new(httpClient, server);
 
@@ -393,29 +372,7 @@ internal static class AccountCommand
         }
         catch (HttpRequestException failure)
         {
-            throw AsFailure(server, failure);
-        }
-        catch (FormatException answer)
-        {
-            throw new ProviderException(ProviderError.Protocol, $"The server is {server.Host}.", answer);
-        }
-    }
-
-    private static async Task<string> ResolveUserIdAsync(
-        Uri server,
-        string loginName,
-        string secret,
-        CancellationToken cancellationToken)
-    {
-        using HttpClient httpClient = Authenticated(loginName, secret);
-
-        try
-        {
-            return await new OcsClient(httpClient, server).GetUserIdAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (HttpRequestException failure)
-        {
-            throw AsFailure(server, failure);
+            throw NextcloudServer.AsFailure(server, failure);
         }
         catch (FormatException answer)
         {
@@ -430,7 +387,7 @@ internal static class AccountCommand
         AccountConfiguration account,
         CancellationToken cancellationToken)
     {
-        if (!IsNextcloud(account.Provider)
+        if (!NextcloudServer.IsNextcloud(account.Provider)
             || account.Server is not { } server
             || LoginOf(account) is not { } loginId
             || account.SecretRef is not { } secretRef)
@@ -480,7 +437,7 @@ internal static class AccountCommand
         string secret,
         CancellationToken cancellationToken)
     {
-        using HttpClient httpClient = Authenticated(loginId, secret);
+        using HttpClient httpClient = NextcloudServer.Authenticated(loginId, secret);
 
         try
         {
@@ -547,41 +504,6 @@ internal static class AccountCommand
             // A reference edited into the file by hand that no store could keep.
             return null;
         }
-    }
-
-    private static HttpClient Authenticated(string loginId, string secret)
-    {
-        HttpClient httpClient = Anonymous();
-
-        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
-            "Basic",
-            Convert.ToBase64String(Encoding.UTF8.GetBytes($"{loginId}:{secret}")));
-
-        return httpClient;
-    }
-
-    private static HttpClient Anonymous()
-    {
-        HttpClient httpClient = new();
-
-        httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"{ProductInfo.Name}/{ProductInfo.Version}");
-
-        return httpClient;
-    }
-
-    // Adding an account talks to the server without a provider in between, and a provider is
-    // what would otherwise turn a failed request into one of the cases the program has a
-    // sentence for.
-    private static ProviderException AsFailure(Uri server, HttpRequestException failure)
-    {
-        ProviderError error = failure.StatusCode switch
-        {
-            null => ProviderError.Unreachable,
-            HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => ProviderError.PermissionDenied,
-            _ => ProviderError.Protocol,
-        };
-
-        return new ProviderException(error, $"The server is {server.Host}.", failure);
     }
 
     private static void OpenBrowser(Uri address)

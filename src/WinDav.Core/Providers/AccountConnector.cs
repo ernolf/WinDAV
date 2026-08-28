@@ -65,6 +65,37 @@ public sealed class AccountConnector
         MountConfiguration mount = Find(configuration, mountId);
         AccountConfiguration account = AccountOf(configuration, mount);
 
+        return await ConnectAsync(account, mount.RemotePath, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Connects the store one account stands for, rooted at one path.
+    /// </summary>
+    /// <param name="account">The account to reach the store as.</param>
+    /// <param name="remotePath">The path that becomes the root of what comes back.</param>
+    /// <param name="cancellationToken">Cancels reading the credential.</param>
+    /// <returns>
+    /// The connection, which the caller disposes. Nothing has been sent to the server yet.
+    /// </returns>
+    /// <remarks>
+    /// What the other overload does once it has looked both of them up. It is here in its own
+    /// right because a mount that is asked for on the command line has an account and a path
+    /// and no entry in the configuration to be found under; decisions.md 72.
+    /// </remarks>
+    /// <exception cref="InvalidDataException">
+    /// The account has no server, or names a provider this build does not have.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The account refers to a credential the secret store does not hold.
+    /// </exception>
+    public async Task<IStorageConnection> ConnectAsync(
+        AccountConfiguration account,
+        string remotePath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(account);
+        ArgumentException.ThrowIfNullOrWhiteSpace(remotePath);
+
         if (account.Server is null)
         {
             throw new InvalidDataException($"The account '{account.Id}' has no server.");
@@ -78,7 +109,7 @@ public sealed class AccountConnector
             UserId = account.UserId,
             LoginId = account.LoginId,
             Secret = secret,
-            RemotePath = mount.RemotePath,
+            RemotePath = remotePath,
             UserAgent = UserAgent,
         });
     }

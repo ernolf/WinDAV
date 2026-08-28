@@ -190,7 +190,7 @@ public sealed class AccountConnectorTests
     {
         await Assert.ThrowsAsync<ArgumentNullException>(
             () => Connector(new RecordingFactory(ProviderName))
-                .ConnectAsync(null!, "files", TestContext.Current.CancellationToken));
+                .ConnectAsync((ClientConfiguration)null!, "files", TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -203,14 +203,64 @@ public sealed class AccountConnectorTests
                 .ConnectAsync(Sample(), mountId, TestContext.Current.CancellationToken));
     }
 
-    private static ClientConfiguration Sample(
+    // Decision 72: a mount asked for on the command line has an account and a path, and no
+    // entry in the configuration to be looked up under.
+    [Fact]
+    public async Task AnAccountIsConnectedWithoutAMountOfItsOwn()
+    {
+        RecordingFactory factory = new(ProviderName);
+
+        using IStorageConnection connection = await Connector(factory).ConnectAsync(
+            Account(loginId: "ernolf@example.com"),
+            "/Documents",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(s_server, factory.Settings!.Server);
+        Assert.Equal("ernolf", factory.Settings.UserId);
+        Assert.Equal("ernolf@example.com", factory.Settings.LoginId);
+        Assert.Equal("/Documents", factory.Settings.RemotePath);
+        Assert.Equal(Credential, factory.Settings.Secret);
+    }
+
+    [Fact]
+    public async Task AnAccountWithoutAServerIsRefusedOnItsOwnToo()
+    {
+        InvalidDataException exception = await Assert.ThrowsAsync<InvalidDataException>(
+            () => Connector(new RecordingFactory(ProviderName)).ConnectAsync(
+                Account(withServer: false),
+                MountConfiguration.RootPath,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("home", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task APathIsNeeded(string remotePath)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => Connector(new RecordingFactory(ProviderName))
+                .ConnectAsync(Account(), remotePath, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task AnAccountIsRequired()
+    {
+        await Assert.ThrowsAsync<ArgumentNullException>(
+            () => Connector(new RecordingFactory(ProviderName)).ConnectAsync(
+                (AccountConfiguration)null!,
+                MountConfiguration.RootPath,
+                TestContext.Current.CancellationToken));
+    }
+
+    private static AccountConfiguration Account(
         string provider = ProviderName,
         string? secretRef = Reference,
-        string remotePath = MountConfiguration.RootPath,
         bool withServer = true,
         string? loginId = null)
     {
-        AccountConfiguration account = new()
+        return new()
         {
             Uuid = s_account,
             Id = "home",
@@ -220,6 +270,16 @@ public sealed class AccountConnectorTests
             LoginId = loginId,
             SecretRef = secretRef,
         };
+    }
+
+    private static ClientConfiguration Sample(
+        string provider = ProviderName,
+        string? secretRef = Reference,
+        string remotePath = MountConfiguration.RootPath,
+        bool withServer = true,
+        string? loginId = null)
+    {
+        AccountConfiguration account = Account(provider, secretRef, withServer, loginId);
 
         MountConfiguration mount = new()
         {

@@ -37,4 +37,42 @@ public sealed class ClientConfiguration
     /// Gets the mounts, each of which exposes part of one account's file tree.
     /// </summary>
     public IReadOnlyList<MountConfiguration> Mounts { get; init; } = [];
+
+    /// <summary>
+    /// Finds an account by the name it is called or by the identity it has.
+    /// </summary>
+    /// <param name="asked">A name, or a uuid in any of its spellings.</param>
+    /// <returns>The account, or <see langword="null"/> when there is none.</returns>
+    /// <remarks>
+    /// The name is looked at first, because it is what a person types; the uuid comes after,
+    /// because it is what a script holds on to, being the one of the two that outlives a
+    /// renaming. See decisions.md 71.
+    /// </remarks>
+    public AccountConfiguration? FindAccount(string asked)
+    {
+        ArgumentNullException.ThrowIfNull(asked);
+
+        foreach (AccountConfiguration account in Accounts)
+        {
+            if (string.Equals(account.Id, asked, StringComparison.OrdinalIgnoreCase))
+            {
+                return account;
+            }
+        }
+
+        if (!Guid.TryParse(asked, out Guid uuid))
+        {
+            return null;
+        }
+
+        foreach (AccountConfiguration account in Accounts)
+        {
+            if (account.Uuid == uuid)
+            {
+                return account;
+            }
+        }
+
+        return null;
+    }
 }
