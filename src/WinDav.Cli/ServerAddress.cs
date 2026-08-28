@@ -13,6 +13,24 @@ namespace WinDav.Cli;
 internal static class ServerAddress
 {
     /// <summary>
+    /// Tells something that was meant as an address from something that was meant as a name.
+    /// </summary>
+    /// <param name="written">What was typed.</param>
+    /// <returns>Whether it was meant as an address.</returns>
+    /// <remarks>
+    /// By the scheme in front of it and by nothing else, so that a person can tell the two
+    /// apart the same way: what carries a scheme is an address, whether or not it is one this
+    /// program takes, and <see cref="Read"/> is what says which. A name that is not an address
+    /// is the name of a mount; decisions.md 73.
+    /// </remarks>
+    internal static bool LooksLikeOne(string written)
+    {
+        ArgumentNullException.ThrowIfNull(written);
+
+        return written.Contains(Uri.SchemeDelimiter, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Reads an address, and refuses anything that is not one.
     /// </summary>
     /// <param name="address">What was typed.</param>

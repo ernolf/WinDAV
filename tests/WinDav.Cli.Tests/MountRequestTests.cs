@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 using WinDav.Core;
+using WinDav.Core.Configuration;
 using WinDav.Providers.Nextcloud;
 using WinDav.Providers.WebDav;
 using Xunit;
@@ -197,6 +198,101 @@ public sealed class MountRequestTests
         Assert.Equal("\\cloud.example.com\\alice", Prefix(whole, "alice"));
         Assert.Equal("Documents", Label(folder, "alice"));
         Assert.Equal("/Documents", folder.RemotePath);
+    }
+
+    // Decision 73: a first word that carries no scheme is the name of a mount that was written
+    // down, and everything that mount is made of stands in the configuration and not here.
+    [Fact]
+    public void AWordThatIsNotAnAddressIsTheNameOfAMount()
+    {
+        MountRequest request = ReadLine("mount", "files");
+
+        Assert.Equal("files", request.Stored);
+        Assert.Null(request.Account);
+        Assert.Null(request.Server);
+        Assert.Null(request.Provider);
+        Assert.False(request.NeedsSecret);
+    }
+
+    [Theory]
+    [InlineData("--path", "/Documents")]
+    [InlineData("--mount", "N:")]
+    [InlineData("--label", "Work drive")]
+    [InlineData("--prefix", "\\\\files\\team")]
+    [InlineData("--account", "home")]
+    public void AMountThatWasWrittenDownTakesNoOptions(string option, string value) =>
+        Assert.Throws<UsageException>(() => ReadLine("mount", "files", option, value));
+
+    [Fact]
+    public void AMountThatWasWrittenDownTakesNoFlagsEither() =>
+        Assert.Throws<UsageException>(() => ReadLine("mount", "files", "--local"));
+
+    // What was written down becomes a request like any other, so that everything past this
+    // point treats a stored mount and a typed one alike.
+    [Fact]
+    public void WhatWasWrittenDownIsWhatIsAskedFor()
+    {
+        MountRequest request = MountRequest.OfStored(new MountConfiguration
+        {
+            Id = "files",
+            Account = "46ef72a2-f6ca-4552-a577-ddd9f3afab9a",
+            RemotePath = "/Documents",
+            DriveLetter = "N",
+            Label = "Work drive",
+            IconPath = @"C:\icons\cloud.ico",
+            NetworkPrefix = "\\files\\team",
+        });
+
+        Assert.Equal("files", request.Stored);
+        Assert.Equal("46ef72a2-f6ca-4552-a577-ddd9f3afab9a", request.Account);
+        Assert.Equal("/Documents", request.RemotePath);
+        Assert.Equal("N:", request.MountPoint);
+        Assert.Equal(@"C:\icons\cloud.ico", request.IconPath);
+        Assert.Equal("Work drive", Label(request, "alice"));
+        Assert.Equal("\\files\\team", Prefix(request, "alice"));
+        Assert.False(request.NeedsSecret);
+    }
+
+    [Fact]
+    public void AMountThatGoesIntoADirectoryIsAskedForAtThatDirectory()
+    {
+        MountRequest request = MountRequest.OfStored(new MountConfiguration
+        {
+            Id = "files",
+            Account = "46ef72a2-f6ca-4552-a577-ddd9f3afab9a",
+            Directory = @"C:\mnt\cloud",
+        });
+
+        Assert.Equal(@"C:\mnt\cloud", request.MountPoint);
+    }
+
+    // Nothing written down about where it goes and what it is called is the same as nothing
+    // typed: the next free letter, and a name taken from what the mount reaches.
+    [Fact]
+    public void AStoredMountThatSaysLittleIsNamedAfterWhatItReaches()
+    {
+        MountRequest request = MountRequest.OfStored(new MountConfiguration
+        {
+            Id = "files",
+            Account = "46ef72a2-f6ca-4552-a577-ddd9f3afab9a",
+        });
+
+        Assert.Null(request.MountPoint);
+        Assert.Equal("alice@cloud.example.com", Label(request, "alice"));
+        Assert.Equal("\\cloud.example.com\\alice", Prefix(request, "alice"));
+    }
+
+    [Fact]
+    public void AStoredLocalDiskStaysOne()
+    {
+        MountRequest request = MountRequest.OfStored(new MountConfiguration
+        {
+            Id = "files",
+            Account = "46ef72a2-f6ca-4552-a577-ddd9f3afab9a",
+            Local = true,
+        });
+
+        Assert.Null(Prefix(request, "alice"));
     }
 
     private static string Label(MountRequest request, string? userId) => request.LabelFor(s_server, userId);

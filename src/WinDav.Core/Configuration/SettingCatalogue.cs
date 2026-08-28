@@ -130,16 +130,48 @@ public static class SettingCatalogue
             Path = "mounts[].driveLetter",
             Summary = "The drive letter the mount takes.",
             Effect = "Windows has twenty-six of them and shares them with everything else on the machine.",
-            DefaultValue = "null",
-            AllowedValues = "a single letter, or null when a directory is given instead",
+            DefaultValue = "null, which is the next free letter",
+            AllowedValues = "a single letter, or null",
         },
         new()
         {
             Path = "mounts[].directory",
             Summary = "The empty NTFS directory the mount goes into.",
-            Effect = "The way past the twenty-six letters. One of this and the drive letter has to be set, not both.",
+            Effect = "The way past the twenty-six letters. Set this or the drive letter, not both.",
             DefaultValue = "null",
-            AllowedValues = "a path to an empty directory, or null when a drive letter is given instead",
+            AllowedValues = "a path to an empty directory, or null",
+        },
+        new()
+        {
+            Path = "mounts[].label",
+            Summary = "What the drive is called.",
+            Effect = "The name Explorer shows and the name the volume answers with.",
+            DefaultValue = "null, which names the mount after what it reaches",
+            AllowedValues = "any text",
+        },
+        new()
+        {
+            Path = "mounts[].iconPath",
+            Summary = "The file the drive icon is taken from.",
+            Effect = "Windows reads it whenever the drive is shown, so it has to still be there afterwards.",
+            DefaultValue = "null, which is the icon Windows gives a network drive",
+            AllowedValues = "the full path of an .ico file",
+        },
+        new()
+        {
+            Path = "mounts[].networkPrefix",
+            Summary = "The network name the drive is also reached under.",
+            Effect = "What Explorer shows as the place the drive comes from, and what a UNC path can name it by.",
+            DefaultValue = "null, which is the server and the user",
+            AllowedValues = "a name as \\server\\share, written with one backslash rather than two",
+        },
+        new()
+        {
+            Path = "mounts[].local",
+            Summary = "Whether the drive appears as a local disk instead of as a network drive.",
+            Effect = "A local disk has no network name, so this and networkPrefix are not set together.",
+            DefaultValue = "false",
+            AllowedValues = "true or false",
         },
         new()
         {

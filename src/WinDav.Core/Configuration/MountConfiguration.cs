@@ -7,10 +7,11 @@ namespace WinDav.Core.Configuration;
 /// One mount: part of one account's file tree, made visible at one place in Windows.
 /// </summary>
 /// <remarks>
-/// Only what already has an effect is here. Settings that need the file system to exist
-/// before they mean anything — how the drive presents itself, how many connections it may
-/// use — arrive with the project that reads them, so that no value can be set today and
-/// silently ignored.
+/// What a mount needs to be made is here, and nothing else: where it reaches, where it
+/// appears and how it presents itself. A mount that is written down can say everything a
+/// mount that is typed out can say; decisions.md 73. Settings that need a project this build
+/// does not have — how many connections a mount may use, what is cached — arrive with it, so
+/// that no value can be set today and silently ignored.
 /// </remarks>
 public sealed class MountConfiguration
 {
@@ -40,9 +41,13 @@ public sealed class MountConfiguration
     public string RemotePath { get; init; } = RootPath;
 
     /// <summary>
-    /// Gets the drive letter to use, as a single letter, or <see langword="null"/> when the
-    /// mount goes into a directory instead.
+    /// Gets the drive letter to use, as a single letter, or <see langword="null"/> to leave
+    /// the choice to Windows.
     /// </summary>
+    /// <remarks>
+    /// Nothing here and no directory either is the next free letter, which is what a mount
+    /// that is typed out without a place to go does as well.
+    /// </remarks>
     public string? DriveLetter { get; init; }
 
     /// <summary>
@@ -54,6 +59,38 @@ public sealed class MountConfiguration
     /// so mounting into a directory is not a fallback but the way out of that limit.
     /// </remarks>
     public string? Directory { get; init; }
+
+    /// <summary>
+    /// Gets what the drive is called, or <see langword="null"/> to name it after what it
+    /// reaches.
+    /// </summary>
+    /// <remarks>
+    /// Derived when it is not given: the account at its server for a whole account, the name
+    /// of the folder for anything below it. See decisions.md 58.
+    /// </remarks>
+    public string? Label { get; init; }
+
+    /// <summary>
+    /// Gets the file the drive icon is taken from, as a full path, or <see langword="null"/>
+    /// for the icon Windows gives a network drive.
+    /// </summary>
+    /// <remarks>
+    /// A full path, because the registry keeps it and is read again long after the command
+    /// that wrote it has ended.
+    /// </remarks>
+    public string? IconPath { get; init; }
+
+    /// <summary>
+    /// Gets the network name the mount is also reached under, in the form
+    /// <c>\Server\Share</c>, or <see langword="null"/> to derive one.
+    /// </summary>
+    public string? NetworkPrefix { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether the mount appears as a local disk rather than as a
+    /// network drive, which leaves it without a network name.
+    /// </summary>
+    public bool Local { get; init; }
 
     /// <summary>
     /// Gets a value indicating whether the mount refuses every write, whatever the server

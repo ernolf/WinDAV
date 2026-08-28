@@ -66,7 +66,32 @@ public sealed class ConfigurationStoreTests : IDisposable
         Assert.Equal(s_account.ToString(), mount.Account);
         Assert.Equal("N", mount.DriveLetter);
         Assert.Null(mount.Directory);
+        Assert.Equal("Work drive", mount.Label);
+        Assert.Equal(@"C:\icons\cloud.ico", mount.IconPath);
+        Assert.Equal(@"\cloud.example.com\ernolf", mount.NetworkPrefix);
+        Assert.False(mount.Local);
         Assert.False(mount.ReadOnly);
+    }
+
+    // Decision 73: a mount that was written down says everything a mount that was typed out
+    // says, and appearing as a local disk is one of the things it can say.
+    [Fact]
+    public async Task ALocalDiskComesBackAsOne()
+    {
+        await _store.SaveAsync(
+            new ClientConfiguration
+            {
+                Accounts = Sample().Accounts,
+                Mounts = [new MountConfiguration { Id = "files", Account = s_account.ToString(), Local = true }],
+            },
+            TestContext.Current.CancellationToken);
+
+        ClientConfiguration read = await _store.LoadAsync(TestContext.Current.CancellationToken);
+        MountConfiguration mount = Assert.Single(read.Mounts);
+
+        Assert.True(mount.Local);
+        Assert.Null(mount.NetworkPrefix);
+        Assert.Null(mount.DriveLetter);
     }
 
     [Fact]
@@ -78,6 +103,7 @@ public sealed class ConfigurationStoreTests : IDisposable
 
         Assert.Contains("\"driveLetter\"", text, StringComparison.Ordinal);
         Assert.Contains("\"remotePath\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"networkPrefix\"", text, StringComparison.Ordinal);
         Assert.DoesNotContain("\"DriveLetter\"", text, StringComparison.Ordinal);
     }
 
@@ -199,6 +225,9 @@ public sealed class ConfigurationStoreTests : IDisposable
                 Id = "files",
                 Account = s_account.ToString(),
                 DriveLetter = "N",
+                Label = "Work drive",
+                IconPath = @"C:\icons\cloud.ico",
+                NetworkPrefix = @"\cloud.example.com\ernolf",
             },
         ],
     };

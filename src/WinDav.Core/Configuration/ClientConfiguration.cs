@@ -75,4 +75,28 @@ public sealed class ClientConfiguration
 
         return null;
     }
+
+    /// <summary>
+    /// Finds a mount by the name it is called.
+    /// </summary>
+    /// <param name="asked">The name, matched without regard to case.</param>
+    /// <returns>The mount, or <see langword="null"/> when there is none.</returns>
+    /// <remarks>
+    /// By the name and by nothing else: a mount has no identity of its own to outlive one,
+    /// because nothing points at a mount the way a mount points at an account.
+    /// </remarks>
+    public MountConfiguration? FindMount(string asked)
+    {
+        ArgumentNullException.ThrowIfNull(asked);
+
+        foreach (MountConfiguration mount in Mounts)
+        {
+            if (string.Equals(mount.Id, asked, StringComparison.OrdinalIgnoreCase))
+            {
+                return mount;
+            }
+        }
+
+        return null;
+    }
 }
