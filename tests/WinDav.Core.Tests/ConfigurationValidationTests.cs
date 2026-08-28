@@ -42,11 +42,56 @@ public sealed class ConfigurationValidationTests : IDisposable
     }
 
     [Fact]
+    public async Task AnAccountNeedsAUuid()
+    {
+        string message = await RejectedAsync(new ClientConfiguration
+        {
+            Accounts =
+            [
+                new AccountConfiguration
+                {
+                    Id = "home",
+                    Server = new Uri("https://cloud.example.com/"),
+                    Provider = "webdav",
+                },
+            ],
+        });
+
+        Assert.Contains("accounts[0] has no uuid", message, StringComparison.Ordinal);
+    }
+
+    // Two accounts a rename cannot tell apart, which is what a hand-copied entry leaves behind.
+    [Fact]
+    public async Task TwoAccountsCannotShareAUuid()
+    {
+        AccountConfiguration home = Account("home");
+        AccountConfiguration copied = new()
+        {
+            Uuid = home.Uuid,
+            Id = "work",
+            Server = home.Server,
+            Provider = home.Provider,
+        };
+
+        string message = await RejectedAsync(new ClientConfiguration { Accounts = [home, copied] });
+
+        Assert.Contains($"repeats the uuid '{home.Uuid}'", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AnAccountNeedsAnId()
     {
         string message = await RejectedAsync(new ClientConfiguration
         {
-            Accounts = [new AccountConfiguration { Server = new Uri("https://cloud.example.com/"), Provider = "webdav" }],
+            Accounts =
+            [
+                new AccountConfiguration
+                {
+                    Uuid = Guid.NewGuid(),
+                    Server = new Uri("https://cloud.example.com/"),
+                    Provider = "webdav",
+                },
+            ],
         });
 
         Assert.Contains("accounts[0] has no id", message, StringComparison.Ordinal);
@@ -57,7 +102,7 @@ public sealed class ConfigurationValidationTests : IDisposable
     {
         string message = await RejectedAsync(new ClientConfiguration
         {
-            Accounts = [new AccountConfiguration { Id = "home", Provider = "webdav" }],
+            Accounts = [new AccountConfiguration { Uuid = Guid.NewGuid(), Id = "home", Provider = "webdav" }],
         });
 
         Assert.Contains("has no server", message, StringComparison.Ordinal);
@@ -72,6 +117,7 @@ public sealed class ConfigurationValidationTests : IDisposable
             [
                 new AccountConfiguration
                 {
+                    Uuid = Guid.NewGuid(),
                     Id = "home",
                     Server = new Uri("cloud.example.com", UriKind.Relative),
                     Provider = "webdav",
@@ -91,6 +137,7 @@ public sealed class ConfigurationValidationTests : IDisposable
             [
                 new AccountConfiguration
                 {
+                    Uuid = Guid.NewGuid(),
                     Id = "home",
                     Server = new Uri("ftp://cloud.example.com/"),
                     Provider = "webdav",
@@ -106,7 +153,15 @@ public sealed class ConfigurationValidationTests : IDisposable
     {
         string message = await RejectedAsync(new ClientConfiguration
         {
-            Accounts = [new AccountConfiguration { Id = "home", Server = new Uri("https://cloud.example.com/") }],
+            Accounts =
+            [
+                new AccountConfiguration
+                {
+                    Uuid = Guid.NewGuid(),
+                    Id = "home",
+                    Server = new Uri("https://cloud.example.com/"),
+                },
+            ],
         });
 
         Assert.Contains("names no provider", message, StringComparison.Ordinal);
@@ -115,22 +170,29 @@ public sealed class ConfigurationValidationTests : IDisposable
     [Fact]
     public async Task AMountCannotNameAnAccountThatIsNotThere()
     {
+        AccountConfiguration stranger = Account("work");
+
         string message = await RejectedAsync(new ClientConfiguration
         {
             Accounts = [Account("home")],
-            Mounts = [Mount("files", "work")],
+            Mounts = [Mount("files", stranger)],
         });
 
-        Assert.Contains("names the account 'work', which does not exist", message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"names the account '{stranger.Uuid}', which does not exist",
+            message,
+            StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task TwoMountsCannotShareAnId()
     {
+        AccountConfiguration home = Account("home");
+
         string message = await RejectedAsync(new ClientConfiguration
         {
-            Accounts = [Account("home")],
-            Mounts = [Mount("files", "home"), Mount("files", "home")],
+            Accounts = [home],
+            Mounts = [Mount("files", home), Mount("files", home)],
         });
 
         Assert.Contains("repeats the id 'files'", message, StringComparison.Ordinal);
@@ -139,15 +201,17 @@ public sealed class ConfigurationValidationTests : IDisposable
     [Fact]
     public async Task AMountTakesEitherALetterOrADirectory()
     {
+        AccountConfiguration home = Account("home");
+
         string message = await RejectedAsync(new ClientConfiguration
         {
-            Accounts = [Account("home")],
+            Accounts = [home],
             Mounts =
             [
                 new MountConfiguration
                 {
                     Id = "files",
-                    Account = "home",
+                    Account = home.Uuid.ToString(),
                     DriveLetter = "N",
                     Directory = @"C:\mnt\cloud",
                 },
@@ -160,10 +224,12 @@ public sealed class ConfigurationValidationTests : IDisposable
     [Fact]
     public async Task AMountWithNoPlaceToGoIsRefused()
     {
+        AccountConfiguration home = Account("home");
+
         string message = await RejectedAsync(new ClientConfiguration
         {
-            Accounts = [Account("home")],
-            Mounts = [new MountConfiguration { Id = "files", Account = "home" }],
+            Accounts = [home],
+            Mounts = [new MountConfiguration { Id = "files", Account = home.Uuid.ToString() }],
         });
 
         Assert.Contains("neither a drive letter nor a directory", message, StringComparison.Ordinal);
@@ -172,10 +238,12 @@ public sealed class ConfigurationValidationTests : IDisposable
     [Fact]
     public async Task ADriveLetterIsOneLetter()
     {
+        AccountConfiguration home = Account("home");
+
         string message = await RejectedAsync(new ClientConfiguration
         {
-            Accounts = [Account("home")],
-            Mounts = [new MountConfiguration { Id = "files", Account = "home", DriveLetter = "N:" }],
+            Accounts = [home],
+            Mounts = [new MountConfiguration { Id = "files", Account = home.Uuid.ToString(), DriveLetter = "N:" }],
         });
 
         Assert.Contains("not a single letter", message, StringComparison.Ordinal);
@@ -184,15 +252,17 @@ public sealed class ConfigurationValidationTests : IDisposable
     [Fact]
     public async Task ARemotePathStartsAtTheRoot()
     {
+        AccountConfiguration home = Account("home");
+
         string message = await RejectedAsync(new ClientConfiguration
         {
-            Accounts = [Account("home")],
+            Accounts = [home],
             Mounts =
             [
                 new MountConfiguration
                 {
                     Id = "files",
-                    Account = "home",
+                    Account = home.Uuid.ToString(),
                     DriveLetter = "N",
                     RemotePath = "documents",
                 },
@@ -220,15 +290,17 @@ public sealed class ConfigurationValidationTests : IDisposable
 
     private static AccountConfiguration Account(string id) => new()
     {
+        Uuid = Guid.NewGuid(),
         Id = id,
         Server = new Uri("https://cloud.example.com/"),
         Provider = "webdav",
     };
 
-    private static MountConfiguration Mount(string id, string account) => new()
+    // Named by what the account is rather than by what it is called: decisions.md 71.
+    private static MountConfiguration Mount(string id, AccountConfiguration account) => new()
     {
         Id = id,
-        Account = account,
+        Account = account.Uuid.ToString(),
         DriveLetter = "N",
     };
 

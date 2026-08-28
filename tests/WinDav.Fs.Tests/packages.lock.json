@@ -167,6 +167,7 @@
       "windav.core": {
         "type": "Project",
         "dependencies": {
+          "System.Security.Cryptography.ProtectedData": "[10.0.10, )",
           "WinDav.Abstractions": "[1.0.0, )"
         }
       },
@@ -177,6 +178,12 @@
           "WinDav.Core": "[1.0.0, )",
           "winfsp.net": "[2.1.25156, )"
         }
+      },
+      "System.Security.Cryptography.ProtectedData": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "BKt0SQgq2lq3ESE68jkeLwv95ypANrPDtkTOIFGcnhg2aRUeUUBDrQlkVDZctrg1WenVcvn5P5XZnuYI7q6rFQ=="
       },
       "winfsp.net": {
         "type": "CentralTransitive",

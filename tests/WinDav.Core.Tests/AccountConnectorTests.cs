@@ -19,6 +19,10 @@ public sealed class AccountConnectorTests
 
     private static readonly Uri s_server = new("https://cloud.example.com/");
 
+    // What the mount points at, which decisions.md 71 keeps apart from what the account is
+    // called. Fixed, so that both halves of the sample can name it.
+    private static readonly Guid s_account = new("2c9a7f10-84b3-4a7e-8f21-6d5c4b3a2910");
+
     [Fact]
     public async Task TheMountsAccountDecidesWhereTheConnectionGoes()
     {
@@ -29,6 +33,33 @@ public sealed class AccountConnectorTests
 
         Assert.Equal(s_server, factory.Settings!.Server);
         Assert.Equal("ernolf", factory.Settings.UserId);
+    }
+
+    // Decision 71: the name the credential is presented under is a question of its own, and
+    // the provider is told both rather than one standing in for the other.
+    [Fact]
+    public async Task TheLoginNameReachesTheProviderNextToTheUser()
+    {
+        RecordingFactory factory = new(ProviderName);
+
+        using IStorageConnection connection = await Connector(factory)
+            .ConnectAsync(Sample(loginId: "ernolf@example.com"), "files", TestContext.Current.CancellationToken);
+
+        Assert.Equal("ernolf", factory.Settings!.UserId);
+        Assert.Equal("ernolf@example.com", factory.Settings.LoginId);
+    }
+
+    // An account reached under the name it is known by leaves the question unanswered rather
+    // than answering it twice.
+    [Fact]
+    public async Task AnAccountWithNoLoginOfItsOwnLeavesItEmpty()
+    {
+        RecordingFactory factory = new(ProviderName);
+
+        using IStorageConnection connection = await Connector(factory)
+            .ConnectAsync(Sample(), "files", TestContext.Current.CancellationToken);
+
+        Assert.Null(factory.Settings!.LoginId);
     }
 
     [Fact]
@@ -176,21 +207,24 @@ public sealed class AccountConnectorTests
         string provider = ProviderName,
         string? secretRef = Reference,
         string remotePath = MountConfiguration.RootPath,
-        bool withServer = true)
+        bool withServer = true,
+        string? loginId = null)
     {
         AccountConfiguration account = new()
         {
+            Uuid = s_account,
             Id = "home",
             Server = withServer ? s_server : null,
             Provider = provider,
             UserId = "ernolf",
+            LoginId = loginId,
             SecretRef = secretRef,
         };
 
         MountConfiguration mount = new()
         {
             Id = "files",
-            Account = "home",
+            Account = s_account.ToString(),
             RemotePath = remotePath,
         };
 

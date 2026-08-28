@@ -1,13 +1,9 @@
 // SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-using System.Text;
 using WinDav.Abstractions;
 using WinDav.Core;
-using WinDav.Core.Providers;
 using WinDav.Fs;
-using WinDav.Providers.Nextcloud;
-using WinDav.Providers.WebDav;
 
 namespace WinDav.Cli;
 
@@ -37,11 +33,11 @@ internal static class MountCommand
         // answer names the version that is there, which a failed mount would not.
         Version driver = ProviderMount.DriverVersion;
 
-        string? secret = request.NeedsSecret ? ReadSecret(request) : null;
+        string? secret = request.NeedsSecret
+            ? Prompt.ReadSecret($"Password for {request.UserId} at {request.Server.Host}: ")
+            : null;
 
-        ProviderRegistry registry = new([new NextcloudProviderFactory(), new WebDavProviderFactory()]);
-
-        using IStorageConnection connection = registry.Resolve(request.Provider).Connect(
+        using IStorageConnection connection = Providers.All().Resolve(request.Provider).Connect(
             new ProviderSettings
             {
                 Server = request.Server,
@@ -95,58 +91,6 @@ internal static class MountCommand
         }
 
         Console.WriteLine("Press Ctrl+C to take it away.");
-    }
-
-    private static string ReadSecret(MountRequest request)
-    {
-        // Asked for rather than taken from an option: a password on a command line is a
-        // password in the history of the shell and in the list of running processes.
-        Console.Write($"Password for {request.UserId} at {request.Server.Host}: ");
-
-        string secret = Console.IsInputRedirected
-            ? Console.ReadLine() ?? string.Empty
-            : ReadHidden();
-
-        if (secret.Length == 0)
-        {
-            throw new UsageException("No password was given.");
-        }
-
-        return secret;
-    }
-
-    private static string ReadHidden()
-    {
-        StringBuilder typed = new();
-
-        while (true)
-        {
-            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
-
-            if (key.Key == ConsoleKey.Enter)
-            {
-                Console.WriteLine();
-
-                return typed.ToString();
-            }
-
-            if (key.Key == ConsoleKey.Backspace)
-            {
-                if (typed.Length > 0)
-                {
-                    typed.Length--;
-                }
-
-                continue;
-            }
-
-            // A key that stands for no character, an arrow key among them, arrives as a
-            // control character and is not part of what was typed.
-            if (!char.IsControl(key.KeyChar))
-            {
-                typed.Append(key.KeyChar);
-            }
-        }
     }
 
     private static async Task WaitAsync(CancellationToken cancellationToken)

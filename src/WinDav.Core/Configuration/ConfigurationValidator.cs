@@ -37,8 +37,8 @@ internal static class ConfigurationValidator
             problems.Add(Invariant($"version is {configuration.Version}, which is not a schema version."));
         }
 
-        HashSet<string> accountIds = CheckAccounts(configuration, problems);
-        CheckMounts(configuration, accountIds, problems);
+        HashSet<string> accounts = CheckAccounts(configuration, problems);
+        CheckMounts(configuration, accounts, problems);
 
         if (problems.Count > 0)
         {
@@ -47,14 +47,26 @@ internal static class ConfigurationValidator
         }
     }
 
+    // The set that comes back holds what a mount names an account by, which is the identity
+    // and not the name.
     private static HashSet<string> CheckAccounts(ClientConfiguration configuration, List<string> problems)
     {
         HashSet<string> ids = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> uuids = new(StringComparer.OrdinalIgnoreCase);
 
         for (int index = 0; index < configuration.Accounts.Count; index++)
         {
             AccountConfiguration account = configuration.Accounts[index];
             string where = Invariant($"accounts[{index}]");
+
+            if (account.Uuid == Guid.Empty)
+            {
+                problems.Add($"{where} has no uuid.");
+            }
+            else if (!uuids.Add(account.Uuid.ToString()))
+            {
+                problems.Add($"{where} repeats the uuid '{account.Uuid}'.");
+            }
 
             if (string.IsNullOrWhiteSpace(account.Id))
             {
@@ -86,12 +98,12 @@ internal static class ConfigurationValidator
             }
         }
 
-        return ids;
+        return uuids;
     }
 
     private static void CheckMounts(
         ClientConfiguration configuration,
-        HashSet<string> accountIds,
+        HashSet<string> accountUuids,
         List<string> problems)
     {
         HashSet<string> ids = new(StringComparer.OrdinalIgnoreCase);
@@ -114,7 +126,7 @@ internal static class ConfigurationValidator
             {
                 problems.Add($"{where} names no account.");
             }
-            else if (!accountIds.Contains(mount.Account))
+            else if (!accountUuids.Contains(mount.Account))
             {
                 problems.Add($"{where} names the account '{mount.Account}', which does not exist.");
             }

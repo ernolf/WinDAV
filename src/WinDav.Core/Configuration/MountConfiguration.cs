@@ -25,8 +25,13 @@ public sealed class MountConfiguration
     public string Id { get; init; } = string.Empty;
 
     /// <summary>
-    /// Gets the <see cref="AccountConfiguration.Id"/> of the account this mount reaches.
+    /// Gets the <see cref="AccountConfiguration.Uuid"/> of the account this mount reaches.
     /// </summary>
+    /// <remarks>
+    /// The identity, not the name: an account that is renamed, or merged with the same
+    /// account reached under another login, must not take its mounts down with it. The
+    /// command line takes the name and resolves it here. See decisions.md 71.
+    /// </remarks>
     public string Account { get; init; } = string.Empty;
 
     /// <summary>
