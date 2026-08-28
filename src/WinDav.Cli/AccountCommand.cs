@@ -4,7 +4,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
-using System.Text;
 using WinDav.Abstractions;
 using WinDav.Core;
 using WinDav.Core.Configuration;
@@ -211,7 +210,7 @@ internal static class AccountCommand
             ]);
         }
 
-        WriteTable(rows);
+        Table.Write(rows);
 
         return Program.Success;
     }
@@ -553,32 +552,4 @@ internal static class AccountCommand
 
     private static void WriteNoAccounts(string filePath) =>
         Console.WriteLine($"There is no account yet. {filePath} is where they go.");
-
-    private static void WriteTable(List<string[]> rows)
-    {
-        int columns = rows[0].Length;
-        int[] widths = new int[columns];
-
-        foreach (string[] row in rows)
-        {
-            for (int column = 0; column < columns; column++)
-            {
-                widths[column] = Math.Max(widths[column], row[column].Length);
-            }
-        }
-
-        foreach (string[] row in rows)
-        {
-            StringBuilder written = new();
-
-            for (int column = 0; column < columns; column++)
-            {
-                // The last column is not padded: trailing spaces are what a line copied out
-                // of a terminal carries with it.
-                written.Append(column == columns - 1 ? row[column] : row[column].PadRight(widths[column] + 2));
-            }
-
-            Console.WriteLine(written.ToString());
-        }
-    }
 }

@@ -132,11 +132,17 @@ internal static class Program
             Usage:
               {ProductInfo.Slug} account add <url> [options]
               {ProductInfo.Slug} account list
-              {ProductInfo.Slug} account remove <id|uuid>
-              {ProductInfo.Slug} mount --account <id|uuid> [options]
+              {ProductInfo.Slug} account remove <account>
+              {ProductInfo.Slug} mount <mount>
+              {ProductInfo.Slug} mount add <mount> --account <account> [options]
+              {ProductInfo.Slug} mount list
+              {ProductInfo.Slug} mount remove <mount>
+              {ProductInfo.Slug} mount --account <account> [options]
               {ProductInfo.Slug} mount <url> [options]
               {ProductInfo.Slug} help
               {ProductInfo.Slug} --version
+
+            <account> is the id or the uuid of an account, <mount> the name of a mount.
 
             Options of account add:
               --provider <name>    The kind of store: nextcloud (the default) or webdav.
@@ -145,17 +151,19 @@ internal static class Program
               --anonymous          Reach the store without a credential, instead of --user.
               --id <name>          What the account is called here. Default: <login>@<server>.
 
-            Options of mount:
-              --account <id|uuid>  The account to mount, instead of an address and a login.
-              --provider <name>    The kind of store: nextcloud (the default) or webdav.
-              --user <name>        The login name. Give it an app password, not the one to the account.
-              --anonymous          Reach the store without a credential, instead of --user.
+            Options of mount and mount add:
+              --account <account>  The account to mount, instead of an address and a login.
               --path <path>        What becomes the root of the drive. Default: the whole account.
               --mount <X:|folder>  A drive letter, or an empty folder. Default: the next free letter.
               --label <text>       What the drive is called. Default: <user>@<server>, or the folder.
               --icon <file>        The drive icon, from an .ico. Default: the one for a network drive.
               --prefix <name>      The network name, as \\server\share. Default: \\<server>\<user>.
               --local              Appear as a local disk instead of as a network drive.
+
+            Options of a mount made from an address, which mount add does not take:
+              --provider <name>    The kind of store: nextcloud (the default) or webdav.
+              --user <name>        The login name. Give it an app password, not the one to the account.
+              --anonymous          Reach the store without a credential, instead of --user.
 
             The password is asked for, so that it stays out of the history of the shell.
             An account is written to the configuration; its credential is kept apart from it,
@@ -170,6 +178,10 @@ internal static class Program
             A mount made from an account asks for nothing, because the server, the user and the
             credential are what the account holds; --provider, --user and --anonymous belong to
             a mount that names no account.
+            A mount that is worth having again is written down with mount add, which asks
+            nothing of a server, and is run afterwards by its name alone: what it was given is
+            what it keeps, so a stored mount takes no options. mount list shows what is there,
+            and mount remove takes one away without touching the account it was made from.
             A mount lasts as long as the command runs, and Ctrl+C takes it away.
             Everything on it is read only in this version.
 

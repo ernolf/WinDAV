@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 using WinDav.Core;
+using WinDav.Core.Configuration;
 using WinDav.Providers.Nextcloud;
 
 namespace WinDav.Cli;
@@ -15,11 +16,11 @@ namespace WinDav.Cli;
 /// the tests can reach without a driver and without a server. What the store turns out to be
 /// is not known here: a mount either names an account, which holds it, or an address, whose
 /// user the server is asked about. The naming therefore waits for it; decisions.md 72.
+/// A mount that names neither is one that is written down, and it becomes a request of this
+/// kind as soon as its line has been read; decisions.md 73.
 /// </remarks>
 internal sealed class MountRequest
 {
-    private const string RootPath = "/";
-
     private static readonly string[] s_options =
     [
         "--account",
@@ -40,6 +41,16 @@ internal sealed class MountRequest
     private MountRequest()
     {
     }
+
+    /// <summary>
+    /// Gets the name of the mount in the configuration this stands for, or
+    /// <see langword="null"/> when nothing was written down.
+    /// </summary>
+    /// <remarks>
+    /// Set both by a request that has only the name yet and by the one built from the line it
+    /// found, which is what the rest of the mount is read out of; decisions.md 73.
+    /// </remarks>
+    internal required string? Stored { get; init; }
 
     /// <summary>
     /// Gets the account the mount is made from, by its id or its uuid, or
@@ -114,14 +125,6 @@ internal sealed class MountRequest
 
         line.EnsureOnlyKnown(s_options);
 
-        bool local = line.Flag("--local");
-        string? prefix = NormalisePrefix(line.Value("--prefix"));
-
-        if (local && prefix is not null)
-        {
-            throw new UsageException("A mount that appears as a local disk has no network name.");
-        }
-
         string? account = line.Value("--account");
         string? provider = null;
         Uri? server = null;
@@ -130,7 +133,14 @@ internal sealed class MountRequest
 
         if (account is null)
         {
-            server = ServerAddress.Read(line.SingleArgument("the address of a server, or --account"));
+            string named = line.SingleArgument("a mount, the address of a server, or --account");
+
+            if (!ServerAddress.LooksLikeOne(named))
+            {
+                return Named(line, named);
+            }
+
+            server = ServerAddress.Read(named);
             anonymous = line.Flag("--anonymous");
             loginId = line.Value("--user");
             provider = line.Value("--provider") ?? NextcloudProviderFactory.ProviderName;
@@ -151,19 +161,62 @@ internal sealed class MountRequest
             EnsureTheAccountIsLeftToIt(line);
         }
 
+        bool local = line.Flag("--local");
+        string? prefix = MountOptions.ReadPrefix(line.Value("--prefix"));
+
+        if (local && prefix is not null)
+        {
+            throw new UsageException("A mount that appears as a local disk has no network name.");
+        }
+
         return new MountRequest
         {
+            Stored = null,
             Account = account,
             Provider = provider,
             Server = server,
             LoginId = loginId,
-            RemotePath = ReadPath(line.Value("--path")),
+            RemotePath = MountOptions.ReadPath(line.Value("--path")),
             MountPoint = line.Value("--mount"),
-            IconPath = ReadIcon(line.Value("--icon")),
+            IconPath = MountOptions.ReadIcon(line.Value("--icon")),
             NeedsSecret = account is null && !anonymous,
-            GivenLabel = line.Value("--label"),
+            GivenLabel = MountOptions.ReadLabel(line.Value("--label")),
             GivenPrefix = prefix,
             Local = local,
+        };
+    }
+
+    /// <summary>
+    /// Reads a mount that was written down, in the form a mount that was typed out takes.
+    /// </summary>
+    /// <param name="mount">The mount as it stands in the configuration.</param>
+    /// <returns>The mount that was asked for.</returns>
+    /// <remarks>
+    /// Everything past this point treats the two alike: a stored mount is one whose values
+    /// came out of a file rather than off a command line, and it reaches its store through the
+    /// account it names, exactly as a mount made with <c>--account</c> does; decisions.md 73.
+    /// </remarks>
+    internal static MountRequest OfStored(MountConfiguration mount)
+    {
+        ArgumentNullException.ThrowIfNull(mount);
+
+        return new MountRequest
+        {
+            Stored = mount.Id,
+
+            // The uuid, which is what the file holds and what the lookup takes as readily as
+            // a name; decisions.md 71.
+            Account = mount.Account,
+            Provider = null,
+            Server = null,
+            LoginId = null,
+            RemotePath = mount.RemotePath,
+            MountPoint = mount.DriveLetter is { } letter ? $"{letter}:" : mount.Directory,
+            IconPath = mount.IconPath,
+            NeedsSecret = false,
+            GivenLabel = mount.Label,
+            GivenPrefix = mount.NetworkPrefix,
+            Local = mount.Local,
         };
     }
 
@@ -196,6 +249,34 @@ internal sealed class MountRequest
         return Local ? null : GivenPrefix ?? DerivePrefix(server, userId, RemotePath);
     }
 
+    // Decision 73: a name that is not an address is a mount in the configuration, and what it
+    // is made of stands in its line there rather than on this one. An option next to it is
+    // the same question as an option next to an account, and it gets the same answer.
+    private static MountRequest Named(CommandLine line, string stored)
+    {
+        foreach (string named in s_options)
+        {
+            if (line.Given(named))
+            {
+                throw new UsageException(
+                    $"The mount '{stored}' says that for itself, so {named} belongs to a mount that is not stored.");
+            }
+        }
+
+        return new MountRequest
+        {
+            Stored = stored,
+            Account = null,
+            Provider = null,
+            Server = null,
+            LoginId = null,
+            RemotePath = MountConfiguration.RootPath,
+            MountPoint = null,
+            IconPath = null,
+            NeedsSecret = false,
+        };
+    }
+
     // Decision 72: the account holds the server, the provider, the user and the credential,
     // so an option that says any of it again either agrees and means nothing, or disagrees
     // and is overruled. Neither is worth allowing.
@@ -217,64 +298,12 @@ internal sealed class MountRequest
         }
     }
 
-    private static string ReadPath(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return RootPath;
-        }
-
-        // Written by a person, so both kinds of slash arrive and a trailing one is common.
-        // The form the rest of the program works in has neither.
-        string written = path.Trim().Replace('\\', '/').TrimEnd('/');
-
-        return written.StartsWith('/') ? written : RootPath + written;
-    }
-
-    private static string? ReadIcon(string? icon)
-    {
-        if (string.IsNullOrWhiteSpace(icon))
-        {
-            return null;
-        }
-
-        // Written as a full path, because the registry keeps it and is read again long after
-        // whatever directory the command ran in has stopped mattering.
-        string path = Path.GetFullPath(icon.Trim());
-
-        if (!File.Exists(path))
-        {
-            throw new UsageException($"There is no file at '{path}'.");
-        }
-
-        return path;
-    }
-
-    private static string? NormalisePrefix(string? prefix)
-    {
-        if (prefix is null)
-        {
-            return null;
-        }
-
-        // A person writes the name Windows shows, with two leading backslashes. WinFsp is
-        // given the same name with one, which is the form a mount carries it in.
-        string written = prefix.Trim().Replace('/', '\\').TrimStart('\\');
-
-        if (written.IndexOf('\\', StringComparison.Ordinal) <= 0)
-        {
-            throw new UsageException("A network name is written as \\\\server\\share.");
-        }
-
-        return "\\" + written;
-    }
-
     // Decision 58: the name of a mount is the account at its server for a whole account, and
     // the name of the folder for anything below it. Decision 72: the user in it is the one
     // the store knows, which is not always the one that was typed.
     private static string DeriveLabel(Uri server, string? userId, string remotePath)
     {
-        if (!string.Equals(remotePath, RootPath, StringComparison.Ordinal))
+        if (!string.Equals(remotePath, MountConfiguration.RootPath, StringComparison.Ordinal))
         {
             return LastSegment(remotePath);
         }
@@ -284,7 +313,7 @@ internal sealed class MountRequest
 
     private static string DerivePrefix(Uri server, string? userId, string remotePath)
     {
-        string share = string.Equals(remotePath, RootPath, StringComparison.Ordinal)
+        string share = string.Equals(remotePath, MountConfiguration.RootPath, StringComparison.Ordinal)
             ? userId ?? ProductInfo.Slug
             : LastSegment(remotePath);
 

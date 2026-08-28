@@ -137,6 +137,7 @@ internal static class ConfigurationValidator
             }
 
             CheckMountPoint(mount, where, problems);
+            CheckAppearance(mount, where, problems);
         }
     }
 
@@ -145,16 +146,44 @@ internal static class ConfigurationValidator
         bool hasLetter = !string.IsNullOrWhiteSpace(mount.DriveLetter);
         bool hasDirectory = !string.IsNullOrWhiteSpace(mount.Directory);
 
-        if (hasLetter == hasDirectory)
+        // Neither of them is the next free letter, which is what a mount that is asked for
+        // without a place to go takes as well; decisions.md 73. Both of them is a choice
+        // nobody has made.
+        if (hasLetter && hasDirectory)
         {
-            problems.Add(hasLetter
-                ? $"{where} has both a drive letter and a directory; it can have one."
-                : $"{where} has neither a drive letter nor a directory.");
+            problems.Add($"{where} has both a drive letter and a directory; it can have one.");
         }
 
         if (hasLetter && (mount.DriveLetter!.Length != 1 || !char.IsAsciiLetter(mount.DriveLetter[0])))
         {
             problems.Add($"{where} has the drive letter '{mount.DriveLetter}', which is not a single letter.");
+        }
+    }
+
+    private static void CheckAppearance(MountConfiguration mount, string where, List<string> problems)
+    {
+        if (mount.Label is not null && string.IsNullOrWhiteSpace(mount.Label))
+        {
+            problems.Add($"{where} has an empty label; leaving it out names the mount after what it reaches.");
+        }
+
+        if (mount.NetworkPrefix is null)
+        {
+            return;
+        }
+
+        if (mount.Local)
+        {
+            problems.Add($"{where} appears as a local disk and has a network name; it can have one.");
+        }
+
+        // The form a mount carries it in, which is the one a person writes with one backslash
+        // fewer: "\server\share" comes apart into nothing, the server and the share.
+        string[] parts = mount.NetworkPrefix.Split('\\');
+
+        if (parts.Length < 3 || parts[0].Length > 0 || parts[1].Length == 0)
+        {
+            problems.Add($"{where} has the network name '{mount.NetworkPrefix}', which is not \\server\\share.");
         }
     }
 

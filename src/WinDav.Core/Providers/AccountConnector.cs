@@ -118,18 +118,9 @@ public sealed class AccountConnector
     // it changes with the version without anybody remembering to change it here.
     private static string UserAgent => $"{ProductInfo.Name}/{ProductInfo.Version}";
 
-    private static MountConfiguration Find(ClientConfiguration configuration, string mountId)
-    {
-        foreach (MountConfiguration mount in configuration.Mounts)
-        {
-            if (string.Equals(mount.Id, mountId, StringComparison.OrdinalIgnoreCase))
-            {
-                return mount;
-            }
-        }
-
-        throw new KeyNotFoundException($"There is no mount named '{mountId}'.");
-    }
+    private static MountConfiguration Find(ClientConfiguration configuration, string mountId) =>
+        configuration.FindMount(mountId)
+        ?? throw new KeyNotFoundException($"There is no mount named '{mountId}'.");
 
     private static AccountConfiguration AccountOf(ClientConfiguration configuration, MountConfiguration mount)
     {

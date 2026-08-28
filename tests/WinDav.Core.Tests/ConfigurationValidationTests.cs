@@ -221,18 +221,85 @@ public sealed class ConfigurationValidationTests : IDisposable
         Assert.Contains("it can have one", message, StringComparison.Ordinal);
     }
 
+    // Decision 73: neither of the two is not a mount without a place to go, it is a mount that
+    // takes the next free letter, which is what one asked for without --mount does as well.
     [Fact]
-    public async Task AMountWithNoPlaceToGoIsRefused()
+    public async Task AMountWithNoPlaceToGoTakesTheNextFreeLetter()
+    {
+        AccountConfiguration home = Account("home");
+
+        await _store.SaveAsync(
+            new ClientConfiguration
+            {
+                Accounts = [home],
+                Mounts = [new MountConfiguration { Id = "files", Account = home.Uuid.ToString() }],
+            },
+            TestContext.Current.CancellationToken);
+
+        ClientConfiguration written = await _store.LoadAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(written.Mounts[0].DriveLetter);
+        Assert.Null(written.Mounts[0].Directory);
+    }
+
+    [Fact]
+    public async Task ALocalDiskHasNoNetworkName()
     {
         AccountConfiguration home = Account("home");
 
         string message = await RejectedAsync(new ClientConfiguration
         {
             Accounts = [home],
-            Mounts = [new MountConfiguration { Id = "files", Account = home.Uuid.ToString() }],
+            Mounts =
+            [
+                new MountConfiguration
+                {
+                    Id = "files",
+                    Account = home.Uuid.ToString(),
+                    Local = true,
+                    NetworkPrefix = @"\files\team",
+                },
+            ],
         });
 
-        Assert.Contains("neither a drive letter nor a directory", message, StringComparison.Ordinal);
+        Assert.Contains("appears as a local disk and has a network name", message, StringComparison.Ordinal);
+    }
+
+    // The form a mount carries it in, which is the one a person writes with one backslash
+    // fewer. A name that is not of that form reaches Windows and is turned down there.
+    [Theory]
+    [InlineData("files")]
+    [InlineData(@"files\team")]
+    [InlineData(@"\files")]
+    [InlineData(@"\\files\team")]
+    public async Task ANetworkNameIsWrittenAsServerAndShare(string prefix)
+    {
+        AccountConfiguration home = Account("home");
+
+        string message = await RejectedAsync(new ClientConfiguration
+        {
+            Accounts = [home],
+            Mounts =
+            [
+                new MountConfiguration { Id = "files", Account = home.Uuid.ToString(), NetworkPrefix = prefix },
+            ],
+        });
+
+        Assert.Contains($"has the network name '{prefix}'", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ALabelWithNothingInItIsRefused()
+    {
+        AccountConfiguration home = Account("home");
+
+        string message = await RejectedAsync(new ClientConfiguration
+        {
+            Accounts = [home],
+            Mounts = [new MountConfiguration { Id = "files", Account = home.Uuid.ToString(), Label = "  " }],
+        });
+
+        Assert.Contains("has an empty label", message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -279,13 +346,14 @@ public sealed class ConfigurationValidationTests : IDisposable
         string message = await RejectedAsync(new ClientConfiguration
         {
             Accounts = [new AccountConfiguration { Id = "home" }],
-            Mounts = [new MountConfiguration { Id = "files", Account = "work" }],
+            Mounts = [new MountConfiguration { Id = "files", Account = "work", Label = " ", NetworkPrefix = "team" }],
         });
 
         Assert.Contains("has no server", message, StringComparison.Ordinal);
         Assert.Contains("names no provider", message, StringComparison.Ordinal);
         Assert.Contains("which does not exist", message, StringComparison.Ordinal);
-        Assert.Contains("neither a drive letter nor a directory", message, StringComparison.Ordinal);
+        Assert.Contains("has an empty label", message, StringComparison.Ordinal);
+        Assert.Contains("which is not \\server\\share", message, StringComparison.Ordinal);
     }
 
     private static AccountConfiguration Account(string id) => new()
