@@ -148,6 +148,18 @@ internal sealed class CommandLine
     }
 
     /// <summary>
+    /// Tells whether an option was written at all.
+    /// </summary>
+    /// <param name="name">The option, dashes included.</param>
+    /// <returns>Whether it is there, with a value or without one.</returns>
+    /// <remarks>
+    /// For refusing an option rather than reading it, where whether it carries a value is not
+    /// the question and asking with <see cref="Flag"/> or <see cref="Value"/> would answer a
+    /// different one.
+    /// </remarks>
+    internal bool Given(string name) => _options.ContainsKey(name);
+
+    /// <summary>
     /// Reads the one thing a command was asked to act on.
     /// </summary>
     /// <param name="what">What that thing is, for the message when it is missing.</param>

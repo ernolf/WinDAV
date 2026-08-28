@@ -133,6 +133,7 @@ internal static class Program
               {ProductInfo.Slug} account add <url> [options]
               {ProductInfo.Slug} account list
               {ProductInfo.Slug} account remove <id|uuid>
+              {ProductInfo.Slug} mount --account <id|uuid> [options]
               {ProductInfo.Slug} mount <url> [options]
               {ProductInfo.Slug} help
               {ProductInfo.Slug} --version
@@ -145,6 +146,7 @@ internal static class Program
               --id <name>          What the account is called here. Default: <login>@<server>.
 
             Options of mount:
+              --account <id|uuid>  The account to mount, instead of an address and a login.
               --provider <name>    The kind of store: nextcloud (the default) or webdav.
               --user <name>        The login name. Give it an app password, not the one to the account.
               --anonymous          Reach the store without a credential, instead of --user.
@@ -165,6 +167,9 @@ internal static class Program
             asked about, and what comes of it is a second account for the same files.
             An account is named by its id or by its uuid, and account list shows both. The uuid
             is what a mount in the configuration points at, so a rename leaves the mount alone.
+            A mount made from an account asks for nothing, because the server, the user and the
+            credential are what the account holds; --provider, --user and --anonymous belong to
+            a mount that names no account.
             A mount lasts as long as the command runs, and Ctrl+C takes it away.
             Everything on it is read only in this version.
 

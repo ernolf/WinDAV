@@ -12,17 +12,32 @@ public sealed class MountRequestTests
 {
     private const string Server = "https://cloud.example.com";
 
+    private static readonly Uri s_server = new(Server);
+
     [Fact]
     public void AWholeAccountIsNamedAfterTheAccountAndItsServer()
     {
         MountRequest request = Read("--user", "alice");
 
-        Assert.Equal("alice@cloud.example.com", request.Label);
-        Assert.Equal("\\cloud.example.com\\alice", request.NetworkPrefix);
+        Assert.Equal("alice@cloud.example.com", Label(request, "alice"));
+        Assert.Equal("\\cloud.example.com\\alice", Prefix(request, "alice"));
         Assert.Equal("/", request.RemotePath);
         Assert.Equal(NextcloudProviderFactory.ProviderName, request.Provider);
         Assert.True(request.NeedsSecret);
         Assert.Null(request.MountPoint);
+        Assert.Null(request.Account);
+    }
+
+    // Decision 72: what was typed is a login, and the drive is named after the user the store
+    // knows, which is the name in the path as well.
+    [Fact]
+    public void ADriveIsNamedAfterTheUserTheStoreKnows()
+    {
+        MountRequest request = Read("--user", "alice@example.com");
+
+        Assert.Equal("alice@example.com", request.LoginId);
+        Assert.Equal("alice@cloud.example.com", Label(request, "alice"));
+        Assert.Equal("\\cloud.example.com\\alice", Prefix(request, "alice"));
     }
 
     [Fact]
@@ -30,8 +45,8 @@ public sealed class MountRequestTests
     {
         MountRequest request = Read("--user", "alice", "--path", "/Documents/Work");
 
-        Assert.Equal("Work", request.Label);
-        Assert.Equal("\\cloud.example.com\\Work", request.NetworkPrefix);
+        Assert.Equal("Work", Label(request, "alice"));
+        Assert.Equal("\\cloud.example.com\\Work", Prefix(request, "alice"));
     }
 
     [Fact]
@@ -47,7 +62,7 @@ public sealed class MountRequestTests
     {
         MountRequest request = Read("--user", "alice", "--label", "Work drive", "--mount", "X:");
 
-        Assert.Equal("Work drive", request.Label);
+        Assert.Equal("Work drive", Label(request, "alice"));
         Assert.Equal("X:", request.MountPoint);
     }
 
@@ -85,7 +100,7 @@ public sealed class MountRequestTests
     {
         MountRequest request = Read("--user", "alice", "--prefix", "\\\\files\\team");
 
-        Assert.Equal("\\files\\team", request.NetworkPrefix);
+        Assert.Equal("\\files\\team", Prefix(request, "alice"));
     }
 
     [Fact]
@@ -97,7 +112,7 @@ public sealed class MountRequestTests
     {
         MountRequest request = Read("--user", "alice", "--local");
 
-        Assert.Null(request.NetworkPrefix);
+        Assert.Null(Prefix(request, "alice"));
     }
 
     [Fact]
@@ -110,10 +125,10 @@ public sealed class MountRequestTests
         MountRequest request = Read("--anonymous", "--provider", WebDavProviderFactory.ProviderName);
 
         Assert.False(request.NeedsSecret);
-        Assert.Null(request.UserId);
+        Assert.Null(request.LoginId);
         Assert.Equal(WebDavProviderFactory.ProviderName, request.Provider);
-        Assert.Equal("cloud.example.com", request.Label);
-        Assert.Equal($"\\cloud.example.com\\{ProductInfo.Slug}", request.NetworkPrefix);
+        Assert.Equal("cloud.example.com", Label(request, null));
+        Assert.Equal($"\\cloud.example.com\\{ProductInfo.Slug}", Prefix(request, null));
     }
 
     [Fact]
@@ -131,6 +146,62 @@ public sealed class MountRequestTests
     [Fact]
     public void AnOptionMountHasNoUseForIsRefused() =>
         Assert.Throws<UsageException>(() => Read("--user", "alice", "--colour", "red"));
+
+    // Decision 72: everything about the store is in the account, so nothing about it is typed
+    // and nothing about it is asked for.
+    [Fact]
+    public void AMountIsMadeFromAnAccount()
+    {
+        MountRequest request = ReadLine("mount", "--account", "home", "--mount", "N:");
+
+        Assert.Equal("home", request.Account);
+        Assert.Null(request.Server);
+        Assert.Null(request.Provider);
+        Assert.Null(request.LoginId);
+        Assert.False(request.NeedsSecret);
+        Assert.Equal("/", request.RemotePath);
+        Assert.Equal("N:", request.MountPoint);
+    }
+
+    [Fact]
+    public void AnAccountIsNamedByItsUuidJustAsWell()
+    {
+        MountRequest request = ReadLine("mount", "--account", "46ef72a2-f6ca-4552-a577-ddd9f3afab9a");
+
+        Assert.Equal("46ef72a2-f6ca-4552-a577-ddd9f3afab9a", request.Account);
+    }
+
+    [Fact]
+    public void AnAccountAndAnAddressAreRefusedTogether() =>
+        Assert.Throws<UsageException>(() => ReadLine("mount", Server, "--account", "home"));
+
+    [Theory]
+    [InlineData("--provider", "webdav")]
+    [InlineData("--user", "alice")]
+    public void WhatTheAccountSettlesIsNotTypedNextToIt(string option, string value) =>
+        Assert.Throws<UsageException>(() => ReadLine("mount", "--account", "home", option, value));
+
+    [Fact]
+    public void AnAccountSaysForItselfWhetherThereIsACredential() =>
+        Assert.Throws<UsageException>(() => ReadLine("mount", "--account", "home", "--anonymous"));
+
+    // The mount keeps what is its own: where it appears, what it is called, and how far down
+    // the account it reaches.
+    [Fact]
+    public void AMountOfAnAccountIsNamedAfterWhatItReaches()
+    {
+        MountRequest whole = ReadLine("mount", "--account", "home");
+        MountRequest folder = ReadLine("mount", "--account", "home", "--path", "/Documents");
+
+        Assert.Equal("alice@cloud.example.com", Label(whole, "alice"));
+        Assert.Equal("\\cloud.example.com\\alice", Prefix(whole, "alice"));
+        Assert.Equal("Documents", Label(folder, "alice"));
+        Assert.Equal("/Documents", folder.RemotePath);
+    }
+
+    private static string Label(MountRequest request, string? userId) => request.LabelFor(s_server, userId);
+
+    private static string? Prefix(MountRequest request, string? userId) => request.PrefixFor(s_server, userId);
 
     private static MountRequest Read(params string[] options)
     {

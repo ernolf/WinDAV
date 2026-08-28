@@ -3,6 +3,9 @@
 
 using WinDav.Abstractions;
 using WinDav.Core;
+using WinDav.Core.Configuration;
+using WinDav.Core.Providers;
+using WinDav.Core.Security;
 using WinDav.Fs;
 
 namespace WinDav.Cli;
@@ -33,61 +36,131 @@ internal static class MountCommand
         // answer names the version that is there, which a failed mount would not.
         Version driver = ProviderMount.DriverVersion;
 
-        string? secret = request.NeedsSecret
-            ? Prompt.ReadSecret($"Password for {request.UserId} at {request.Server.Host}: ")
-            : null;
+        (IStorageConnection connection, Uri server, string? userId) =
+            await OpenAsync(request, cancellationToken).ConfigureAwait(false);
 
-        using IStorageConnection connection = Providers.All().Resolve(request.Provider).Connect(
-            new ProviderSettings
-            {
-                Server = request.Server,
-                UserId = request.UserId,
-                Secret = secret,
-                RemotePath = request.RemotePath,
-                UserAgent = $"{ProductInfo.Name}/{ProductInfo.Version}",
-            });
-
-        // One request before the drive appears, so that a wrong credential or a path that is
-        // not there is a sentence here instead of an error in every window afterwards.
-        RemoteEntry root = await connection.Provider.GetAsync(RemoteRoot, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!root.IsDirectory)
+        using (connection)
         {
-            throw new UsageException($"'{request.RemotePath}' is a file, and a mount needs a directory.");
-        }
+            // Decision 72: named after the store as it turned out to be, so that the drive
+            // carries the user the server knows rather than the one that was typed.
+            string label = request.LabelFor(server, userId);
+            string? prefix = request.PrefixFor(server, userId);
 
-        // The remote path went to the provider, which is rooted at it, so everything above it
-        // is out of reach. Rooting the file system as well would apply it a second time.
-        using ProviderMount mount = new(
-            connection.Provider,
-            new MountSettings
+            // One request before the drive appears, so that a wrong credential or a path that
+            // is not there is a sentence here instead of an error in every window afterwards.
+            RemoteEntry root = await connection.Provider.GetAsync(RemoteRoot, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!root.IsDirectory)
             {
-                MountPoint = request.MountPoint,
-                NetworkPrefix = request.NetworkPrefix,
-                VolumeLabel = request.Label,
-                ExplorerName = request.Label,
-                IconPath = request.IconPath,
-            });
+                throw new UsageException($"'{request.RemotePath}' is a file, and a mount needs a directory.");
+            }
 
-        mount.Mount();
+            // The remote path went to the provider, which is rooted at it, so everything above
+            // it is out of reach. Rooting the file system as well would apply it a second time.
+            using ProviderMount mount = new(
+                connection.Provider,
+                new MountSettings
+                {
+                    MountPoint = request.MountPoint,
+                    NetworkPrefix = prefix,
+                    VolumeLabel = label,
+                    ExplorerName = label,
+                    IconPath = request.IconPath,
+                });
 
-        Announce(request, mount, driver);
+            mount.Mount();
 
-        await WaitAsync(cancellationToken).ConfigureAwait(false);
+            Announce(label, prefix, mount, driver);
+
+            await WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         Console.WriteLine("Unmounting.");
 
         return Program.Success;
     }
 
-    private static void Announce(MountRequest request, ProviderMount mount, Version driver)
-    {
-        Console.WriteLine($"{request.Label} is on {mount.MountPoint}, read only, over WinFsp {driver}.");
+    // What the mount shows and what it is called after: the connection, and the store it
+    // turned out to reach. Both ways of asking for a mount end here.
+    private static Task<(IStorageConnection Connection, Uri Server, string? UserId)> OpenAsync(
+        MountRequest request,
+        CancellationToken cancellationToken) =>
+        request.Account is { } account
+            ? OfAccountAsync(account, request, cancellationToken)
+            : TypedAsync(request, cancellationToken);
 
-        if (request.NetworkPrefix is not null)
+    // Decision 72: everything about the store is in the account, credential included, so this
+    // is a mount that asks for nothing.
+    private static async Task<(IStorageConnection Connection, Uri Server, string? UserId)> OfAccountAsync(
+        string asked,
+        MountRequest request,
+        CancellationToken cancellationToken)
+    {
+        ConfigurationStore store = ConfigurationStore.Default();
+        ClientConfiguration client = await store.LoadAsync(cancellationToken).ConfigureAwait(false);
+
+        // Decision 71: by the name or by the uuid, whichever was given.
+        AccountConfiguration account = client.FindAccount(asked)
+            ?? throw new UsageException($"There is no account '{asked}', by that name or by that uuid.");
+
+        if (account.Server is not { } server)
         {
-            Console.WriteLine($"It is also reached as \\{request.NetworkPrefix}.");
+            throw new UsageException($"The account '{account.Id}' has no server, so there is nothing to mount.");
+        }
+
+        IStorageConnection connection = await new AccountConnector(Providers.All(), DpapiSecretStore.Default())
+            .ConnectAsync(account, request.RemotePath, cancellationToken)
+            .ConfigureAwait(false);
+
+        return (connection, server, account.UserId);
+    }
+
+    private static async Task<(IStorageConnection Connection, Uri Server, string? UserId)> TypedAsync(
+        MountRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.Server is not { } server || request.Provider is not { } provider)
+        {
+            // A mount names an account or an address, and the caller has looked for the
+            // account already.
+            throw new UsageException("A mount needs --account or the address of a server.");
+        }
+
+        string? loginId = request.LoginId;
+        string? secret = request.NeedsSecret
+            ? Prompt.ReadSecret($"Password for {loginId} at {server.Host}: ")
+            : null;
+
+        // Decision 72: what was typed is the name the credential is presented under, and the
+        // name in the path is the server's own. Asking for it here is what keeps a login that
+        // is spelt as an address from becoming a path that is not there.
+        string? userId = loginId is not null && secret is not null && NextcloudServer.IsNextcloud(provider)
+            ? await NextcloudServer.ResolveUserIdAsync(server, loginId, secret, cancellationToken)
+                .ConfigureAwait(false)
+            : loginId;
+
+        IStorageConnection connection = Providers.All().Resolve(provider).Connect(
+            new ProviderSettings
+            {
+                Server = server,
+                UserId = userId,
+                LoginId = loginId,
+                Secret = secret,
+                RemotePath = request.RemotePath,
+                UserAgent = $"{ProductInfo.Name}/{ProductInfo.Version}",
+            });
+
+        return (connection, server, userId);
+    }
+
+    private static void Announce(string label, string? prefix, ProviderMount mount, Version driver)
+    {
+        Console.WriteLine($"{label} is on {mount.MountPoint}, read only, over WinFsp {driver}.");
+
+        if (prefix is not null)
+        {
+            Console.WriteLine($"It is also reached as \\{prefix}.");
         }
 
         Console.WriteLine("Press Ctrl+C to take it away.");
