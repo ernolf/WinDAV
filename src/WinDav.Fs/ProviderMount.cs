@@ -3,6 +3,8 @@
 
 using System.ComponentModel;
 using Fsp;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using WinDav.Abstractions;
 
 namespace WinDav.Fs;
@@ -31,6 +33,7 @@ public sealed class ProviderMount : IDisposable
 
     private readonly FileSystemHost _host;
     private readonly MountSettings _settings;
+    private readonly ILogger _log;
 
     // Held while the branding is written or taken away, because the tick runs on a thread of
     // the pool and disposing is what it races with.
@@ -38,6 +41,7 @@ public sealed class ProviderMount : IDisposable
 
     private MountBranding? _branding;
     private Timer? _tick;
+    private bool _mounted;
     private bool _disposed;
 
     /// <summary>
@@ -46,13 +50,21 @@ public sealed class ProviderMount : IDisposable
     /// </summary>
     /// <param name="provider">The store to show.</param>
     /// <param name="settings">Where the mount appears and how it presents itself.</param>
+    /// <param name="loggerFactory">
+    /// Where a mount going up and coming down is written down. Nothing is written without one,
+    /// which is what a test that only wants a mount asks for.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
-    public ProviderMount(IStorageProvider provider, MountSettings settings)
+    public ProviderMount(
+        IStorageProvider provider,
+        MountSettings settings,
+        ILoggerFactory? loggerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
         _settings = settings;
         _host = new FileSystemHost(new WinDavFileSystem(provider, settings));
+        _log = loggerFactory?.CreateLogger(typeof(ProviderMount)) ?? NullLogger.Instance;
     }
 
     /// <summary>
@@ -99,6 +111,20 @@ public sealed class ProviderMount : IDisposable
         _branding.Ensure();
 
         _tick = new Timer(_ => Tick(), null, s_tickInterval, s_tickInterval);
+        _mounted = true;
+
+        // Decision 74 has this always on: a mount that is up and one that is gone are the two
+        // things a person asks about afterwards, and neither leaves any other trace. Asked
+        // first all the same, so that what the arguments cost is not paid by a log that is
+        // switched off (CA1873).
+        if (_log.IsEnabled(LogLevel.Information))
+        {
+            _log.LogInformation(
+                "Mount {Label} is up at {MountPoint} over WinFsp {Driver}.",
+                _settings.VolumeLabel,
+                _host.MountPoint(),
+                DriverVersion);
+        }
     }
 
     /// <summary>
@@ -125,7 +151,15 @@ public sealed class ProviderMount : IDisposable
             _branding = null;
         }
 
+        // Asked while the mount still has one: the host answers null once it is disposed.
+        string? mountPoint = _host.MountPoint();
+
         _host.Dispose();
+
+        if (_mounted && _log.IsEnabled(LogLevel.Information))
+        {
+            _log.LogInformation("Mount {Label} at {MountPoint} is gone.", _settings.VolumeLabel, mountPoint);
+        }
 
         GC.SuppressFinalize(this);
     }
