@@ -13,7 +13,8 @@ namespace WinDav.Core.Logging;
 /// This is the whole of what a container would otherwise be asked for. A program builds one
 /// of these, asks it for a logger per class, and disposes it on the way out; the file it
 /// writes to belongs to whoever made it. What is deliberately not here is the rest of the
-/// stack: no host, no service collection, no configuration binder. See decisions.md 74.
+/// stack: no host, no service collection, no configuration binder. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#74-logging-five-levels-four-areas-and-a-switch-that-turns-itself-off">decision 74</see>.
 /// </para>
 /// <para>
 /// The seam is the one every C# programmer already knows, so a test that wants to read what
@@ -38,8 +39,8 @@ public sealed class FileLoggerFactory : ILoggerFactory
     /// when nothing was. It is not disposed with the factory either.
     /// </param>
     /// <param name="minimum">
-    /// The quietest level that is still written. Information by default, which is what
-    /// decision 74 has always on.
+    /// The quietest level that is still written. <see cref="LogLevels.Default"/> unless
+    /// another is given, and <see cref="LogLevel.None"/> to write nothing at all.
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="file"/> is null.</exception>
     /// <remarks>
@@ -49,7 +50,7 @@ public sealed class FileLoggerFactory : ILoggerFactory
     public FileLoggerFactory(
         LogFile file,
         LogRecording? recording = null,
-        LogLevel minimum = LogLevel.Information)
+        LogLevel minimum = LogLevels.Default)
     {
         ArgumentNullException.ThrowIfNull(file);
 
