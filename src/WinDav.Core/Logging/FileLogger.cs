@@ -10,19 +10,22 @@ namespace WinDav.Core.Logging;
 /// </summary>
 /// <remarks>
 /// The area is worked out once, when the logger is made, because the category it comes from
-/// cannot change afterwards.
+/// cannot change afterwards. What is asked every time is the recording: whether one is
+/// running, whether it covers this area, and whether it is still allowed to.
 /// </remarks>
 internal sealed class FileLogger : ILogger
 {
     private readonly LogFile _file;
     private readonly LogArea _area;
     private readonly LogLevel _minimum;
+    private readonly LogRecording? _recording;
 
-    internal FileLogger(LogFile file, LogArea area, LogLevel minimum)
+    internal FileLogger(LogFile file, LogArea area, LogLevel minimum, LogRecording? recording)
     {
         _file = file;
         _area = area;
         _minimum = minimum;
+        _recording = recording;
     }
 
     // Scopes are not kept. A record says what it says, and nothing about it depends on what
@@ -31,7 +34,8 @@ internal sealed class FileLogger : ILogger
     public IDisposable? BeginScope<TState>(TState state)
         where TState : notnull => null;
 
-    public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None && logLevel >= _minimum;
+    public bool IsEnabled(LogLevel logLevel) =>
+        logLevel != LogLevel.None && (logLevel >= _minimum || Recorded(logLevel));
 
     public void Log<TState>(
         LogLevel logLevel,
@@ -42,11 +46,29 @@ internal sealed class FileLogger : ILogger
     {
         ArgumentNullException.ThrowIfNull(formatter);
 
-        if (!IsEnabled(logLevel))
+        if (logLevel == LogLevel.None)
         {
             return;
         }
 
-        _file.Write(DateTimeOffset.Now, logLevel, _area, formatter(state, exception), exception);
+        bool always = logLevel >= _minimum;
+
+        // Asked once, and the answer used twice: whether the recording is what let this
+        // record through decides whether the record counts against what it may write.
+        bool recorded = !always && Recorded(logLevel);
+
+        if (!always && !recorded)
+        {
+            return;
+        }
+
+        int bytes = _file.Write(DateTimeOffset.Now, logLevel, _area, formatter(state, exception), exception);
+
+        if (recorded)
+        {
+            _recording?.Note(bytes);
+        }
     }
+
+    private bool Recorded(LogLevel logLevel) => _recording?.Covers(_area, logLevel) == true;
 }

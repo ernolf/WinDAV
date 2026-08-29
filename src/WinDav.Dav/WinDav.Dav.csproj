@@ -3,7 +3,14 @@
   <!-- RFC 4918 on the wire: methods, properties, the If header, locking. -->
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <!-- Core for the logging sink and for what a record must not carry. A project that writes
+       records references it; WinDav.Fs does the same. -->
+  <ItemGroup>
     <ProjectReference Include="..\WinDav.Abstractions\WinDav.Abstractions.csproj" />
+    <ProjectReference Include="..\WinDav.Core\WinDav.Core.csproj" />
   </ItemGroup>
 
 </Project>

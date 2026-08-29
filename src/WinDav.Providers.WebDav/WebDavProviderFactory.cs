@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+using Microsoft.Extensions.Logging;
 using WinDav.Abstractions;
 using WinDav.Dav;
 
@@ -19,6 +20,18 @@ public sealed class WebDavProviderFactory : DavProviderFactory
     /// The name this kind of store is written under in a configuration.
     /// </summary>
     public const string ProviderName = "webdav";
+
+    /// <summary>
+    /// Initialises a new instance of the <see cref="WebDavProviderFactory"/> class.
+    /// </summary>
+    /// <param name="logging">
+    /// Where what goes out on the wire is written down, or <see langword="null"/> for a
+    /// factory that writes nothing.
+    /// </param>
+    public WebDavProviderFactory(ILoggerFactory? logging = null)
+        : base(logging)
+    {
+    }
 
     /// <inheritdoc/>
     public override string Name => ProviderName;

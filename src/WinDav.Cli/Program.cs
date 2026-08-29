@@ -38,17 +38,47 @@ internal static class Program
             cancellation.Cancel();
         };
 
+        CommandLine line;
+        LogSwitches? switches;
+
+        // Before anything is opened, because a recording asked for in a way that cannot be
+        // read is a command line to correct, and a command line to correct leaves no file.
+        try
+        {
+            line = CommandLine.Parse(args);
+            switches = LogSwitches.Read(line);
+        }
+        catch (UsageException usage)
+        {
+            return WriteUsageProblem(usage.Message);
+        }
+
         // The file is not created until something is written to it, so a command that has
         // nothing to say leaves nothing behind. The command line goes into the header, with
         // anything in it that could be a credential taken out first.
         using LogFile file = LogFile.Default(LogRedaction.CommandLine(args));
-        using FileLoggerFactory logging = new(file);
+
+        // Started here and disposed before the file is, so that the line saying how the
+        // recording ended is in the file it belongs to. A recording that ran its time out
+        // has closed itself long before this.
+        using LogRecording? recording = switches?.Start(file);
+        using FileLoggerFactory logging = new(file, recording);
 
         ILogger log = logging.CreateLogger(typeof(Program));
 
         try
         {
-            return await RunAsync(args, logging, cancellation.Token).ConfigureAwait(false);
+            int status = await RunAsync(line, logging, cancellation.Token).ConfigureAwait(false);
+
+            // The command line itself is in the header of the file. What is worth a record of
+            // its own is what came of it, because a command that answered nothing and one that
+            // answered that it failed look the same from outside.
+            if (log.IsEnabled(LogLevel.Debug))
+            {
+                log.LogDebug("{Command} answered {Status}.", line.Verb ?? "help", status);
+            }
+
+            return status;
         }
         catch (UsageException usage)
         {
@@ -105,12 +135,10 @@ internal static class Program
     }
 
     private static async Task<int> RunAsync(
-        string[] args,
+        CommandLine line,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
-        CommandLine line = CommandLine.Parse(args);
-
         if (line.Flag("--version"))
         {
             Console.WriteLine($"{ProductInfo.Name} {ProductInfo.Version}");
@@ -179,6 +207,19 @@ internal static class Program
               --provider <name>    The kind of store: nextcloud (the default) or webdav.
               --user <name>        The login name. Give it an app password, not the one to the account.
               --anonymous          Reach the store without a credential, instead of --user.
+
+            Options of any command:
+              --debug [areas]      Also write what was done, for a while.
+              --trace [areas]      Also write every step of it, which is a great deal more.
+              --for <time>         How long that lasts: 90s, 5m, 1h. Default: 60s, at most 1h.
+
+            What was done and what failed is written to %LOCALAPPDATA%\{ProductInfo.Slug}\logs
+            whether anything was asked for or not. The areas of --debug and --trace are fs,
+            http, provider and cli, separated by commas, and all of them when none is named.
+            They belong after the command, as in "mount name --trace fs,http", because an
+            option takes the word after it as its value. A recording ends by itself, when the
+            time is up or when it has written 16 MB, and the file says which of the two it
+            was; nothing starts it again.
 
             The password is asked for, so that it stays out of the history of the shell.
             An account is written to the configuration; its credential is kept apart from it,

@@ -91,7 +91,7 @@ internal static class MountCommand
         }
 
         (IStorageConnection connection, Uri server, string? userId) =
-            await OpenAsync(request, client, cancellationToken).ConfigureAwait(false);
+            await OpenAsync(request, client, logging, cancellationToken).ConfigureAwait(false);
 
         using (connection)
         {
@@ -282,10 +282,11 @@ internal static class MountCommand
     private static Task<(IStorageConnection Connection, Uri Server, string? UserId)> OpenAsync(
         MountRequest request,
         ClientConfiguration? client,
+        ILoggerFactory logging,
         CancellationToken cancellationToken) =>
         (request.Account, client) is (string account, ClientConfiguration configured)
-            ? OfAccountAsync(configured, account, request, cancellationToken)
-            : TypedAsync(request, cancellationToken);
+            ? OfAccountAsync(configured, account, request, logging, cancellationToken)
+            : TypedAsync(request, logging, cancellationToken);
 
     // Decision 72: everything about the store is in the account, credential included, so this
     // is a mount that asks for nothing.
@@ -293,6 +294,7 @@ internal static class MountCommand
         ClientConfiguration client,
         string asked,
         MountRequest request,
+        ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
         // Decision 71: by the name or by the uuid, whichever was given. A stored mount gives
@@ -305,7 +307,10 @@ internal static class MountCommand
             throw new UsageException($"The account '{account.Id}' has no server, so there is nothing to mount.");
         }
 
-        IStorageConnection connection = await new AccountConnector(Providers.All(), DpapiSecretStore.Default())
+        IStorageConnection connection = await new AccountConnector(
+                Providers.All(logging),
+                DpapiSecretStore.Default(),
+                logging)
             .ConnectAsync(account, request.RemotePath, cancellationToken)
             .ConfigureAwait(false);
 
@@ -314,6 +319,7 @@ internal static class MountCommand
 
     private static async Task<(IStorageConnection Connection, Uri Server, string? UserId)> TypedAsync(
         MountRequest request,
+        ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
         if (request.Server is not { } server || request.Provider is not { } provider)
@@ -336,7 +342,7 @@ internal static class MountCommand
                 .ConfigureAwait(false)
             : loginId;
 
-        IStorageConnection connection = Providers.All().Resolve(provider).Connect(
+        IStorageConnection connection = Providers.All(logging).Resolve(provider).Connect(
             new ProviderSettings
             {
                 Server = server,

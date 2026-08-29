@@ -4,6 +4,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Net.Http.Headers;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using WinDav.Abstractions;
 
 namespace WinDav.Dav;
@@ -28,6 +29,24 @@ public abstract class DavProviderFactory : IStorageProviderFactory
     // server which changed address is followed without a restart.
     private static readonly TimeSpan s_connectionLifetime = TimeSpan.FromMinutes(15);
 
+    private readonly ILoggerFactory? _logging;
+
+    /// <summary>
+    /// Initialises a new instance of the <see cref="DavProviderFactory"/> class.
+    /// </summary>
+    /// <param name="logging">
+    /// Where what goes out on the wire is written down, or <see langword="null"/> for a
+    /// factory that writes nothing.
+    /// </param>
+    /// <remarks>
+    /// Taken here rather than per connection, because a factory is built once by whoever
+    /// knows what the program is doing, and a connection is built by whoever needs one.
+    /// </remarks>
+    protected DavProviderFactory(ILoggerFactory? logging)
+    {
+        _logging = logging;
+    }
+
     /// <inheritdoc/>
     public abstract string Name { get; }
 
@@ -40,7 +59,7 @@ public abstract class DavProviderFactory : IStorageProviderFactory
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        HttpClient httpClient = new(CreateMessageHandler(), disposeHandler: true)
+        HttpClient httpClient = new(Watch(CreateMessageHandler()), disposeHandler: true)
         {
             // What bounds an operation is the caller's token. A timeout on the client
             // covers reading the response body as well, so a large download would be cut
@@ -101,6 +120,16 @@ public abstract class DavProviderFactory : IStorageProviderFactory
             PooledConnectionLifetime = s_connectionLifetime,
             MaxConnectionsPerServer = ConnectionsPerServer,
         };
+
+    // The handler that was made, wrapped in the one that writes down what passes through it,
+    // and left as it is when nothing is being written down. Inside Connect, so that the
+    // ownership of both is the one thing the suppression up there already covers: whichever
+    // of the two the client is given, the client disposes it, and the wrapper disposes what
+    // it wraps.
+    private HttpMessageHandler Watch(HttpMessageHandler transport) =>
+        _logging is null
+            ? transport
+            : new LoggingHandler(transport, _logging.CreateLogger<LoggingHandler>());
 
     // Sent from the first request rather than waited for. Challenge-response would cost a
     // 401 on every request, and a server that answers an unauthenticated request with 404

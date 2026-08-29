@@ -3,7 +3,9 @@
 
 using System.Net;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using WinDav.Abstractions;
+using WinDav.Core.Logging;
 using Xunit;
 
 namespace WinDav.Dav.Tests;
@@ -47,6 +49,31 @@ public sealed class DavProviderFactoryTests
         await factory.Client!.PropFindAsync(s_server, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Null(factory.Handler!.Authorization);
+    }
+
+    // The one place a password could still surface, since every request this product sends
+    // carries one. What is asserted is both halves of it: the request is written down, and
+    // the credential in it is not.
+    [Fact]
+    public async Task ACredentialNeverReachesWhatIsWrittenDown()
+    {
+        using RecordingLoggerFactory logging = new();
+
+        TestFactory factory = new(logging);
+        using IStorageConnection connection = factory.Connect(Settings(userId: "ernolf", secret: "open sesame"));
+
+        await factory.Client!.PropFindAsync(s_server, cancellationToken: TestContext.Current.CancellationToken);
+
+        string written = logging.Written;
+
+        Assert.Contains("PROPFIND https://cloud.example.com/", written, StringComparison.Ordinal);
+        Assert.Contains($"Authorization: {LogRedaction.Marker}", written, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("open sesame", written, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            Convert.ToBase64String(Encoding.UTF8.GetBytes("ernolf:open sesame")),
+            written,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -139,6 +166,11 @@ public sealed class DavProviderFactoryTests
 
     private sealed class TestFactory : DavProviderFactory
     {
+        public TestFactory(ILoggerFactory? logging = null)
+            : base(logging)
+        {
+        }
+
         public override string Name => "test";
 
         public RecordingHandler? Handler { get; private set; }
@@ -205,6 +237,51 @@ public sealed class DavProviderFactoryTests
             }
 
             base.Dispose(disposing);
+        }
+    }
+
+    // Everything the handler is willing to write, kept as it was written. The file sink is
+    // not in the way, because what a credential must never reach is the record itself.
+    private sealed class RecordingLoggerFactory : ILoggerFactory
+    {
+        private readonly List<string> _records = [];
+
+        public string Written => string.Join('\n', _records);
+
+        public ILogger CreateLogger(string categoryName) => new RecordingLogger(this);
+
+        public void AddProvider(ILoggerProvider provider) => throw new NotSupportedException();
+
+        public void Dispose() => GC.SuppressFinalize(this);
+
+        internal void Add(string record) => _records.Add(record);
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        private readonly RecordingLoggerFactory _written;
+
+        internal RecordingLogger(RecordingLoggerFactory written)
+        {
+            _written = written;
+        }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        // Everything, so that what is asserted is what the loudest recording would hold.
+        public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            ArgumentNullException.ThrowIfNull(formatter);
+
+            _written.Add(formatter(state, exception));
         }
     }
 

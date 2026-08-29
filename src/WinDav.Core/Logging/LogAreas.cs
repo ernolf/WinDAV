@@ -24,6 +24,20 @@ public static class LogAreas
     ];
 
     /// <summary>
+    /// Gets every area there is, in the order they are listed in a message to a person.
+    /// </summary>
+    /// <remarks>
+    /// A recording that names none is a recording of all of them, and this is that list.
+    /// </remarks>
+    public static IReadOnlyList<LogArea> All { get; } =
+    [
+        LogArea.Fs,
+        LogArea.Http,
+        LogArea.Provider,
+        LogArea.Cli,
+    ];
+
+    /// <summary>
     /// Reads the area out of the name a logger was created under.
     /// </summary>
     /// <param name="categoryName">The category, which is the full name of a type.</param>
@@ -59,4 +73,31 @@ public static class LogAreas
         LogArea.Provider => "provider",
         _ => "cli",
     };
+
+    /// <summary>
+    /// Reads an area from the name it is written under.
+    /// </summary>
+    /// <param name="name">The name, in any case.</param>
+    /// <param name="area">The area, when the name is one.</param>
+    /// <returns><see langword="true"/> when the name is one of the four.</returns>
+    /// <remarks>
+    /// The names a person types on the command line are the names they read in the file. One
+    /// spelling, learnt once.
+    /// </remarks>
+    public static bool TryParse(string? name, out LogArea area)
+    {
+        foreach (LogArea candidate in All)
+        {
+            if (string.Equals(Name(candidate), name, StringComparison.OrdinalIgnoreCase))
+            {
+                area = candidate;
+
+                return true;
+            }
+        }
+
+        area = LogArea.Cli;
+
+        return false;
+    }
 }

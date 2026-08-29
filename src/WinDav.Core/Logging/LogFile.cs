@@ -128,47 +128,39 @@ public sealed class LogFile : IDisposable
     /// <param name="area">Where it came from.</param>
     /// <param name="message">What it says, with anything sensitive already taken out.</param>
     /// <param name="exception">What went wrong, or <see langword="null"/>.</param>
+    /// <returns>
+    /// How many bytes it took, and zero when nothing was written because the file is closed
+    /// or has failed.
+    /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="message"/> is null.</exception>
-    public void Write(DateTimeOffset when, LogLevel level, LogArea area, string message, Exception? exception)
+    /// <remarks>
+    /// The count is what a recording measures itself against. It is the size in the file and
+    /// not the length of the message, because the limit a person is given is the size of what
+    /// they will have to read.
+    /// </remarks>
+    public int Write(DateTimeOffset when, LogLevel level, LogArea area, string message, Exception? exception)
     {
         ArgumentNullException.ThrowIfNull(message);
 
-        lock (_gate)
-        {
-            if (_disposed || _broken)
-            {
-                return;
-            }
+        return Put(when, LogFormat.Line(when, level, area, message, exception), isRecord: true);
+    }
 
-            byte[] record = s_encoding.GetBytes(LogFormat.Line(when, level, area, message, exception));
+    /// <summary>
+    /// Writes one line that says something about the file rather than about the product.
+    /// </summary>
+    /// <param name="when">When it is being said.</param>
+    /// <param name="text">What is being said, with anything sensitive already taken out.</param>
+    /// <returns>How many bytes it took, and zero when nothing was written.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="text"/> is null.</exception>
+    /// <remarks>
+    /// It is not a record and is not counted as one: the line at the end of a file says how
+    /// many things happened, and a note about the file is not one of them.
+    /// </remarks>
+    public int Note(DateTimeOffset when, string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
 
-            try
-            {
-                if (_stream is null)
-                {
-                    Open(when);
-                }
-                else if (_bytes + record.Length > MaximumFileBytes)
-                {
-                    Close(when);
-                    Open(when);
-                }
-
-                _stream!.Write(record);
-                _stream.Flush();
-
-                _bytes += record.Length;
-                _records++;
-            }
-            catch (IOException)
-            {
-                Break();
-            }
-            catch (UnauthorizedAccessException)
-            {
-                Break();
-            }
-        }
+        return Put(when, LogFormat.Comment(when, text), isRecord: false);
     }
 
     /// <summary>
@@ -190,6 +182,56 @@ public sealed class LogFile : IDisposable
         }
 
         GC.SuppressFinalize(this);
+    }
+
+    private int Put(DateTimeOffset when, string line, bool isRecord)
+    {
+        lock (_gate)
+        {
+            if (_disposed || _broken)
+            {
+                return 0;
+            }
+
+            byte[] payload = s_encoding.GetBytes(line);
+
+            try
+            {
+                if (_stream is null)
+                {
+                    Open(when);
+                }
+                else if (_bytes + payload.Length > MaximumFileBytes)
+                {
+                    Close(when);
+                    Open(when);
+                }
+
+                _stream!.Write(payload);
+                _stream.Flush();
+
+                _bytes += payload.Length;
+
+                if (isRecord)
+                {
+                    _records++;
+                }
+            }
+            catch (IOException)
+            {
+                Break();
+
+                return 0;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Break();
+
+                return 0;
+            }
+
+            return payload.Length;
+        }
     }
 
     private void Open(DateTimeOffset when)

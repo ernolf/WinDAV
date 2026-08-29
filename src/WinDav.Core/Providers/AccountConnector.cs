@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using WinDav.Abstractions;
 using WinDav.Core.Configuration;
+using WinDav.Core.Logging;
 using WinDav.Core.Security;
 
 namespace WinDav.Core.Providers;
@@ -21,18 +24,28 @@ public sealed class AccountConnector
 
     private readonly ISecretStore _secrets;
 
+    private readonly ILogger _log;
+
     /// <summary>
     /// Initialises a new instance of the <see cref="AccountConnector"/> class.
     /// </summary>
     /// <param name="registry">The providers this build knows.</param>
     /// <param name="secrets">Where the credentials are kept.</param>
-    public AccountConnector(ProviderRegistry registry, ISecretStore secrets)
+    /// <param name="loggerFactory">
+    /// Where what is being connected to is written down, or <see langword="null"/> for a
+    /// connector that writes nothing.
+    /// </param>
+    public AccountConnector(
+        ProviderRegistry registry,
+        ISecretStore secrets,
+        ILoggerFactory? loggerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(secrets);
 
         _registry = registry;
         _secrets = secrets;
+        _log = loggerFactory?.CreateLogger(typeof(AccountConnector)) ?? NullLogger.Instance;
     }
 
     /// <summary>
@@ -102,6 +115,20 @@ public sealed class AccountConnector
         }
 
         string? secret = await ReadSecretAsync(account, cancellationToken).ConfigureAwait(false);
+
+        // What is about to be reached and as whom, which is the line the wire records under
+        // it are to be read against. The address is redacted and the credential is named only
+        // as present or absent: taking one apart is what puts a password in a file.
+        if (_log.IsEnabled(LogLevel.Debug))
+        {
+            _log.LogDebug(
+                "Connecting {Account} at {Server} as {User} over {Provider}, {Credential}.",
+                account.Id,
+                LogRedaction.Server(account.Server),
+                account.LoginId ?? account.UserId ?? "nobody",
+                account.Provider,
+                secret is null ? "without a credential" : "with the credential from the store");
+        }
 
         return _registry.Resolve(account.Provider).Connect(new ProviderSettings
         {
