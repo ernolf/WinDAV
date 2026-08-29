@@ -39,7 +39,7 @@ internal static class Program
         };
 
         CommandLine line;
-        LogSwitches? switches;
+        LogSwitches switches;
 
         // Before anything is opened, because a recording asked for in a way that cannot be
         // read is a command line to correct, and a command line to correct leaves no file.
@@ -61,8 +61,8 @@ internal static class Program
         // Started here and disposed before the file is, so that the line saying how the
         // recording ended is in the file it belongs to. A recording that ran its time out
         // has closed itself long before this.
-        using LogRecording? recording = switches?.Start(file);
-        using FileLoggerFactory logging = new(file, recording);
+        using LogRecording? recording = switches.Start(file);
+        using FileLoggerFactory logging = new(file, recording, switches.Minimum);
 
         ILogger log = logging.CreateLogger(typeof(Program));
 
@@ -209,17 +209,23 @@ internal static class Program
               --anonymous          Reach the store without a credential, instead of --user.
 
             Options of any command:
+              --log <level>        What is written whatever happens: error, warn, info (the
+                                   default), debug, trace, or off for nothing at all.
               --debug [areas]      Also write what was done, for a while.
               --trace [areas]      Also write every step of it, which is a great deal more.
               --for <time>         How long that lasts: 90s, 5m, 1h. Default: 60s, at most 1h.
 
             What was done and what failed is written to %LOCALAPPDATA%\{ProductInfo.Slug}\logs
-            whether anything was asked for or not. The areas of --debug and --trace are fs,
-            http, provider and cli, separated by commas, and all of them when none is named.
+            whether anything was asked for or not, and --log off stops that: nothing is
+            written and no file is made. The areas of --debug and --trace are fs, http,
+            provider and cli, separated by commas, and all of them when none is named.
             They belong after the command, as in "mount name --trace fs,http", because an
             option takes the word after it as its value. A recording ends by itself, when the
             time is up or when it has written 16 MB, and the file says which of the two it
-            was; nothing starts it again.
+            was; nothing starts it again. What --log asks for has no such end: it lasts as
+            long as the command does.
+            All four are read from the environment as well, as {LogSwitches.Variable(LogSwitches.LevelOption)}, {LogSwitches.Variable(LogSwitches.DebugOption)},
+            {LogSwitches.Variable(LogSwitches.TraceOption)} and {LogSwitches.Variable(LogSwitches.ForOption)}; an option wins over its variable.
 
             The password is asked for, so that it stays out of the history of the shell.
             An account is written to the configuration; its credential is kept apart from it,

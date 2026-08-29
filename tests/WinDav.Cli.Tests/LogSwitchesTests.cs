@@ -24,7 +24,50 @@ public sealed class LogSwitchesTests : IDisposable
     }
 
     [Fact]
-    public void NothingAskedForIsNothingRecorded() => Assert.Null(Read("mount", "cloud"));
+    public void NothingAskedForIsNothingRecordedAndTheFloorIsTheUsualOne()
+    {
+        LogSwitches switches = Switches("mount", "cloud");
+
+        Assert.Null(switches.Level);
+        Assert.Equal(LogLevels.Default, switches.Minimum);
+        Assert.Empty(switches.Areas);
+    }
+
+    [Theory]
+    [InlineData("debug", LogLevel.Debug)]
+    [InlineData("error", LogLevel.Error)]
+    [InlineData("OFF", LogLevel.None)]
+    public void TheFloorIsTheLevelThatWasNamed(string given, LogLevel expected)
+    {
+        LogSwitches switches = Switches("mount", "cloud", "--log", given);
+
+        Assert.Equal(expected, switches.Minimum);
+        Assert.Null(switches.Level);
+    }
+
+    [Fact]
+    public void ALevelThatIsNoLevelIsRefusedByName()
+    {
+        UsageException refused = Assert.Throws<UsageException>(() => Switches("mount", "cloud", "--log", "fatal"));
+
+        Assert.Contains("fatal", refused.Message, StringComparison.Ordinal);
+        Assert.Contains(LogLevels.OffName, refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ALevelWithoutAValueIsRefused() =>
+        Assert.Throws<UsageException>(() => Switches("mount", "cloud", "--log"));
+
+    // The floor is what is always written, the recording is what is added to it for a while.
+    // One says nothing about the other, and asking for both is not asking twice.
+    [Fact]
+    public void TheFloorAndARecordingAreReadApart()
+    {
+        LogSwitches switches = Switches("mount", "cloud", "--log", "trace", "--debug", "fs");
+
+        Assert.Equal(LogLevel.Trace, switches.Minimum);
+        Assert.Equal(LogLevel.Debug, switches.Level);
+    }
 
     [Fact]
     public void AskingForALevelAndNothingElseAsksForEveryAreaForTheDefaultTime()
@@ -76,26 +119,26 @@ public sealed class LogSwitchesTests : IDisposable
     [InlineData("soon")]
     [InlineData("5x")]
     public void ATimeThatIsNotOneIsRefused(string given) =>
-        Assert.Throws<UsageException>(() => Read("mount", "cloud", "--debug", "--for", given));
+        Assert.Throws<UsageException>(() => Switches("mount", "cloud", "--debug", "--for", given));
 
     // Trace would swallow debug, but which of the two was meant is a guess, and a recording is
     // asked for while something is going wrong.
     [Fact]
     public void AskingForBothLevelsIsRefused() =>
-        Assert.Throws<UsageException>(() => Read("mount", "cloud", "--debug", "--trace"));
+        Assert.Throws<UsageException>(() => Switches("mount", "cloud", "--debug", "--trace"));
 
     [Fact]
     public void ATimeWithNothingToRecordIsRefused() =>
-        Assert.Throws<UsageException>(() => Read("mount", "cloud", "--for", "5m"));
+        Assert.Throws<UsageException>(() => Switches("mount", "cloud", "--for", "5m"));
 
     [Fact]
     public void ATimeWithoutAValueIsRefused() =>
-        Assert.Throws<UsageException>(() => Read("mount", "cloud", "--debug", "--for"));
+        Assert.Throws<UsageException>(() => Switches("mount", "cloud", "--debug", "--for"));
 
     [Fact]
     public void AnAreaThatIsNoAreaIsRefusedByName()
     {
-        UsageException refused = Assert.Throws<UsageException>(() => Read("mount", "cloud", "--trace", "fs,dav"));
+        UsageException refused = Assert.Throws<UsageException>(() => Switches("mount", "cloud", "--trace", "fs,dav"));
 
         Assert.Contains("dav", refused.Message, StringComparison.Ordinal);
         Assert.Contains("provider", refused.Message, StringComparison.Ordinal);
@@ -106,9 +149,10 @@ public sealed class LogSwitchesTests : IDisposable
     [Fact]
     public void TheSwitchesAreTakenOutOfTheCommandLine()
     {
-        CommandLine line = CommandLine.Parse(["mount", "cloud", "--trace", "fs", "--for", "5m"]);
+        CommandLine line = CommandLine.Parse(
+            ["mount", "cloud", "--log", "off", "--trace", "fs", "--for", "5m"]);
 
-        Assert.NotNull(LogSwitches.Read(line));
+        Assert.Equal(LogLevel.None, LogSwitches.Read(line, _ => null).Minimum);
 
         line.EnsureOnlyKnown([]);
 
@@ -123,7 +167,8 @@ public sealed class LogSwitchesTests : IDisposable
 
         using (LogFile file = new(_directory, "windav mount cloud --trace fs,http --for 90s"))
         {
-            using LogRecording recording = Switches("mount", "cloud", "--trace", "fs,http", "--for", "90s").Start(file);
+            using LogRecording recording = Assert.IsType<LogRecording>(
+                Switches("mount", "cloud", "--trace", "fs,http", "--for", "90s").Start(file));
 
             Assert.Equal(LogLevel.Trace, recording.Level);
             Assert.Equal<LogArea>([LogArea.Fs, LogArea.Http], recording.Areas);
@@ -138,7 +183,84 @@ public sealed class LogSwitchesTests : IDisposable
             StringComparison.Ordinal);
     }
 
-    private static LogSwitches? Read(params string[] tokens) => LogSwitches.Read(CommandLine.Parse(tokens));
+    // A service, a scheduled task and a script that starts twenty mounts have no command line
+    // anyone edits at the moment it matters, and every one of them has an environment.
+    [Fact]
+    public void AVariableSaysWhatItsOptionSays()
+    {
+        LogSwitches switches = WithEnvironment(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["WINDAV_LOG"] = "debug",
+                ["WINDAV_TRACE"] = "fs,http",
+                ["WINDAV_FOR"] = "5m",
+            },
+            "mount",
+            "cloud");
 
-    private static LogSwitches Switches(params string[] tokens) => Assert.IsType<LogSwitches>(Read(tokens));
+        Assert.Equal(LogLevel.Debug, switches.Minimum);
+        Assert.Equal(LogLevel.Trace, switches.Level);
+        Assert.Equal<LogArea>([LogArea.Fs, LogArea.Http], switches.Areas);
+        Assert.Equal(TimeSpan.FromMinutes(5), switches.Duration);
+    }
+
+    // What is written on the command line is written for this one run; what is in the
+    // environment was put there for whatever runs there.
+    [Fact]
+    public void TheOptionWinsOverItsVariable()
+    {
+        LogSwitches switches = WithEnvironment(
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["WINDAV_LOG"] = "trace" },
+            "mount",
+            "cloud",
+            "--log",
+            "error");
+
+        Assert.Equal(LogLevel.Error, switches.Minimum);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void AVariableWithNothingInItIsNoVariable(string value)
+    {
+        LogSwitches switches = WithEnvironment(
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["WINDAV_DEBUG"] = value },
+            "mount",
+            "cloud");
+
+        Assert.Null(switches.Level);
+    }
+
+    [Fact]
+    public void AVariableIsRefusedInTheSameWordsAsItsOption()
+    {
+        UsageException refused = Assert.Throws<UsageException>(() => WithEnvironment(
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["WINDAV_LOG"] = "fatal" },
+            "mount",
+            "cloud"));
+
+        Assert.Contains("fatal", refused.Message, StringComparison.Ordinal);
+    }
+
+    // The names are published, and a variable that is renamed is a script that stops working.
+    [Theory]
+    [InlineData(LogSwitches.LevelOption, "WINDAV_LOG")]
+    [InlineData(LogSwitches.DebugOption, "WINDAV_DEBUG")]
+    [InlineData(LogSwitches.TraceOption, "WINDAV_TRACE")]
+    [InlineData(LogSwitches.ForOption, "WINDAV_FOR")]
+    public void EachOptionHasItsVariable(string option, string expected) =>
+        Assert.Equal(expected, LogSwitches.Variable(option));
+
+    // Nothing here reads the environment of the process it runs in: a machine that has one of
+    // the four variables set is not a machine where these tests say something else.
+    private static LogSwitches Switches(params string[] tokens) =>
+        LogSwitches.Read(CommandLine.Parse(tokens), _ => null);
+
+    private static LogSwitches WithEnvironment(
+        Dictionary<string, string> environment,
+        params string[] tokens) =>
+        LogSwitches.Read(
+            CommandLine.Parse(tokens),
+            name => environment.TryGetValue(name, out string? value) ? value : null);
 }
