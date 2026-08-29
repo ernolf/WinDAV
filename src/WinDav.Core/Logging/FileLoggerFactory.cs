@@ -24,6 +24,7 @@ namespace WinDav.Core.Logging;
 public sealed class FileLoggerFactory : ILoggerFactory
 {
     private readonly LogFile _file;
+    private readonly LogRecording? _recording;
     private readonly LogLevel _minimum;
 
     private bool _disposed;
@@ -32,16 +33,28 @@ public sealed class FileLoggerFactory : ILoggerFactory
     /// Initialises a new instance of the <see cref="FileLoggerFactory"/> class.
     /// </summary>
     /// <param name="file">Where the records go. It is not disposed with the factory.</param>
+    /// <param name="recording">
+    /// What was asked for on top of the levels that are always on, or <see langword="null"/>
+    /// when nothing was. It is not disposed with the factory either.
+    /// </param>
     /// <param name="minimum">
     /// The quietest level that is still written. Information by default, which is what
     /// decision 74 has always on.
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="file"/> is null.</exception>
-    public FileLoggerFactory(LogFile file, LogLevel minimum = LogLevel.Information)
+    /// <remarks>
+    /// One recording for all the loggers, because it is one spell of loud logging with one
+    /// clock and one budget, however many classes write into it.
+    /// </remarks>
+    public FileLoggerFactory(
+        LogFile file,
+        LogRecording? recording = null,
+        LogLevel minimum = LogLevel.Information)
     {
         ArgumentNullException.ThrowIfNull(file);
 
         _file = file;
+        _recording = recording;
         _minimum = minimum;
     }
 
@@ -63,7 +76,7 @@ public sealed class FileLoggerFactory : ILoggerFactory
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(categoryName);
 
-        return new FileLogger(_file, LogAreas.Of(categoryName), _minimum);
+        return new FileLogger(_file, LogAreas.Of(categoryName), _minimum, _recording);
     }
 
     /// <summary>

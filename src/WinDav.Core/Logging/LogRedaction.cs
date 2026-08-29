@@ -27,6 +27,19 @@ public static class LogRedaction
     /// </summary>
     public const string Marker = "***REMOVED SENSITIVE VALUE***";
 
+    // What a credential travels in over HTTP. Authorization is on every request this product
+    // sends; the rest are here because a server may answer with them and because a proxy in
+    // front of one may ask for its own.
+    private static readonly string[] s_secretHeaders =
+    [
+        "Authorization",
+        "Proxy-Authorization",
+        "WWW-Authenticate",
+        "Proxy-Authenticate",
+        "Cookie",
+        "Set-Cookie",
+    ];
+
     /// <summary>
     /// Writes an address without what may be a credential in it.
     /// </summary>
@@ -66,6 +79,44 @@ public static class LogRedaction
         }
 
         return text.ToString();
+    }
+
+    /// <summary>
+    /// Writes what a header carries, or the marker when the header is one that carries a
+    /// credential.
+    /// </summary>
+    /// <param name="name">The name of the header.</param>
+    /// <param name="values">What it carries.</param>
+    /// <returns>The values, or the marker.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="values"/> is null.</exception>
+    /// <remarks>
+    /// By name and not by looking at the value: every request this product sends carries a
+    /// password in Authorization, and a rule that has to recognise one is a rule that will
+    /// one day fail to.
+    /// </remarks>
+    public static string Header(string? name, IEnumerable<string> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+
+        return IsSecret(name) ? Marker : string.Join(", ", values);
+    }
+
+    /// <summary>
+    /// Tells whether a header is one of those that carry a credential.
+    /// </summary>
+    /// <param name="name">The name of the header.</param>
+    /// <returns>Whether what it carries has to be taken out.</returns>
+    public static bool IsSecret(string? name)
+    {
+        foreach (string secret in s_secretHeaders)
+        {
+            if (string.Equals(secret, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

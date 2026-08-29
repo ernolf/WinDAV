@@ -51,8 +51,9 @@ public sealed class ProviderMount : IDisposable
     /// <param name="provider">The store to show.</param>
     /// <param name="settings">Where the mount appears and how it presents itself.</param>
     /// <param name="loggerFactory">
-    /// Where a mount going up and coming down is written down. Nothing is written without one,
-    /// which is what a test that only wants a mount asks for.
+    /// Where a mount going up and coming down is written down, and with it everything the
+    /// file system underneath was asked for. Nothing is written without one, which is what a
+    /// test that only wants a mount asks for.
     /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public ProviderMount(
@@ -63,7 +64,7 @@ public sealed class ProviderMount : IDisposable
         ArgumentNullException.ThrowIfNull(settings);
 
         _settings = settings;
-        _host = new FileSystemHost(new WinDavFileSystem(provider, settings));
+        _host = new FileSystemHost(new WinDavFileSystem(provider, settings, loggerFactory));
         _log = loggerFactory?.CreateLogger(typeof(ProviderMount)) ?? NullLogger.Instance;
     }
 

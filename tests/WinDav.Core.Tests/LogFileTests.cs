@@ -116,7 +116,59 @@ public sealed class LogFileTests : IDisposable
         Assert.True(File.Exists(path));
     }
 
-    private static void Write(LogFile file, string message) =>
+    // The line at the end of a file says how many things happened, and a note about the file
+    // itself is not one of them.
+    [Fact]
+    public void ANoteIsWrittenDownAndIsNotARecord()
+    {
+        string path;
+
+        using (LogFile file = new(_directory, Command))
+        {
+            Write(file, "It is up.");
+            file.Note(DateTimeOffset.Now, "recording ended after 1 record, the time was up");
+
+            path = Assert.IsType<string>(file.FilePath);
+        }
+
+        string[] lines = File.ReadAllText(path).Split(LogFormat.LineEnd, StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.EndsWith("recording ended after 1 record, the time was up", lines[^2], StringComparison.Ordinal);
+        Assert.EndsWith("after 1 record", lines[^1], StringComparison.Ordinal);
+    }
+
+    // What a recording measures itself against is the size in the file, not the length of the
+    // message: the limit a person is given is the size of what they will have to read.
+    [Fact]
+    public void WhatARecordCostIsWhatItTookInTheFile()
+    {
+        using LogFile file = new(_directory, Command);
+
+        Write(file, "It is up.");
+
+        string path = Assert.IsType<string>(file.FilePath);
+        long before = new FileInfo(path).Length;
+
+        int written = Write(file, "It is still up.");
+
+        Assert.Equal(before + written, new FileInfo(path).Length);
+    }
+
+    // Nothing here throws at the caller, so what says a record was dropped is the count.
+    [Fact]
+    public void NothingCostsAnythingOnceTheFileIsClosed()
+    {
+        LogFile file = new(_directory, Command);
+
+        Write(file, "It is up.");
+
+        file.Dispose();
+
+        Assert.Equal(0, Write(file, "It is gone."));
+        Assert.Equal(0, file.Note(DateTimeOffset.Now, "and so is this"));
+    }
+
+    private static int Write(LogFile file, string message) =>
         file.Write(DateTimeOffset.Now, LogLevel.Information, LogArea.Fs, message, null);
 
     private string Leftover(string name, DateTime written)

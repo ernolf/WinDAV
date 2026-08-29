@@ -66,4 +66,42 @@ public sealed class LogRedactionTests
         Assert.Equal($"{ProductInfo.Slug} mount https://{LogRedaction.Marker}@cloud.example/ --local", written);
         Assert.DoesNotContain(Secret, written, StringComparison.Ordinal);
     }
+
+    // By name and not by looking at what it carries: every request this product sends has a
+    // password in Authorization, and a rule that has to recognise one will one day fail to.
+    [Theory]
+    [InlineData("Authorization")]
+    [InlineData("authorization")]
+    [InlineData("Proxy-Authorization")]
+    [InlineData("WWW-Authenticate")]
+    [InlineData("Proxy-Authenticate")]
+    [InlineData("Cookie")]
+    [InlineData("Set-Cookie")]
+    public void AHeaderThatCarriesACredentialIsTakenOut(string name)
+    {
+        Assert.True(LogRedaction.IsSecret(name));
+
+        string written = LogRedaction.Header(name, [$"Basic {Secret}"]);
+
+        Assert.Equal(LogRedaction.Marker, written);
+        Assert.DoesNotContain(Secret, written, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Content-Type")]
+    [InlineData("Depth")]
+    [InlineData("User-Agent")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void EveryOtherHeaderIsWrittenOutAsItIs(string? name)
+    {
+        Assert.False(LogRedaction.IsSecret(name));
+        Assert.Equal("application/xml", LogRedaction.Header(name, ["application/xml"]));
+    }
+
+    // A header may be given more than once, and a record that showed only the first of them
+    // would be a record that lied.
+    [Fact]
+    public void AHeaderGivenTwiceIsWrittenAsOne() =>
+        Assert.Equal("no-cache, no-store", LogRedaction.Header("Cache-Control", ["no-cache", "no-store"]));
 }

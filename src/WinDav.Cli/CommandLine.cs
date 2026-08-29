@@ -148,6 +148,24 @@ internal sealed class CommandLine
     }
 
     /// <summary>
+    /// Reads an option and takes it out, so that the command it was written in front of does
+    /// not see it.
+    /// </summary>
+    /// <param name="name">The option, dashes included.</param>
+    /// <param name="value">
+    /// What it was given, and <see langword="null"/> when it was written on its own or not
+    /// written at all.
+    /// </param>
+    /// <returns>Whether it was there.</returns>
+    /// <remarks>
+    /// For the few options that belong to the program rather than to a command. They may
+    /// stand anywhere, every command would otherwise have to know about them to let them
+    /// through <see cref="EnsureOnlyKnown"/>, and what they ask for has already happened by
+    /// the time the command runs.
+    /// </remarks>
+    internal bool Take(string name, out string? value) => _options.Remove(name, out value);
+
+    /// <summary>
     /// Tells whether an option was written at all.
     /// </summary>
     /// <param name="name">The option, dashes included.</param>

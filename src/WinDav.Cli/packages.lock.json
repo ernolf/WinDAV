@@ -41,7 +41,9 @@
       "windav.dav": {
         "type": "Project",
         "dependencies": {
-          "WinDav.Abstractions": "[1.0.0, )"
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
+          "WinDav.Abstractions": "[1.0.0, )",
+          "WinDav.Core": "[1.0.0, )"
         }
       },
       "windav.fs": {
@@ -56,6 +58,7 @@
       "windav.providers.nextcloud": {
         "type": "Project",
         "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
           "WinDav.Abstractions": "[1.0.0, )",
           "WinDav.Dav": "[1.0.0, )"
         }
@@ -63,6 +66,7 @@
       "windav.providers.webdav": {
         "type": "Project",
         "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
           "WinDav.Abstractions": "[1.0.0, )",
           "WinDav.Dav": "[1.0.0, )"
         }

@@ -2,9 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 using System.Buffers;
+using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using Fsp;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using WinDav.Abstractions;
 using WinDav.Core;
 using FileInfo = Fsp.Interop.FileInfo;
@@ -64,11 +68,16 @@ public sealed class WinDavFileSystem : FileSystemBase
 
     private const int TransferBufferSize = 64 * 1024;
 
+    // Milliseconds with one place, the same as the wire records are written with, so that a
+    // read and the requests underneath it can be laid side by side.
+    private const string ElapsedFormat = "0.#";
+
     private static readonly long s_fileTimeEpochTicks =
         new DateTime(1601, 1, 1, 0, 0, 0, DateTimeKind.Utc).Ticks;
 
     private readonly IStorageProvider _provider;
     private readonly MountSettings _settings;
+    private readonly ILogger _log;
     private readonly byte[] _security;
     private readonly ulong _mountTime = (ulong)DateTime.UtcNow.ToFileTimeUtc();
 
@@ -82,14 +91,22 @@ public sealed class WinDavFileSystem : FileSystemBase
     /// </summary>
     /// <param name="provider">The store to show.</param>
     /// <param name="settings">How this mount presents itself.</param>
+    /// <param name="loggerFactory">
+    /// Where what Windows asked for is written down, or <see langword="null"/> for a file
+    /// system that writes nothing, which is what a test that only wants answers asks for.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
-    public WinDavFileSystem(IStorageProvider provider, MountSettings settings)
+    public WinDavFileSystem(
+        IStorageProvider provider,
+        MountSettings settings,
+        ILoggerFactory? loggerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(settings);
 
         _provider = provider;
         _settings = settings;
+        _log = loggerFactory?.CreateLogger(typeof(WinDavFileSystem)) ?? NullLogger.Instance;
         _root = NormaliseRoot(settings.RemotePath);
 
         RawSecurityDescriptor descriptor = new(RootSddl);
@@ -136,6 +153,7 @@ public sealed class WinDavFileSystem : FileSystemBase
     /// <inheritdoc/>
     public override int GetVolumeInfo(out VolumeInfo volumeInfo)
     {
+        long started = Stopwatch.GetTimestamp();
         StorageSpace space = SpaceOfTheVolume();
 
         // What is left is what the store said, or the headroom when it said nothing. What
@@ -151,6 +169,15 @@ public sealed class WinDavFileSystem : FileSystemBase
         volumeInfo.FreeSize = free;
         volumeInfo.SetVolumeLabel(_settings.VolumeLabel);
 
+        if (_log.IsEnabled(LogLevel.Debug))
+        {
+            _log.LogDebug(
+                "Asked the store for room in {Elapsed} ms: {Free} bytes free of {Total}.",
+                Elapsed(started),
+                free,
+                free + used);
+        }
+
         return STATUS_SUCCESS;
     }
 
@@ -165,9 +192,12 @@ public sealed class WinDavFileSystem : FileSystemBase
     {
         fileAttributes = 0;
 
+        string path = ToRemotePath(fileName);
+        long started = Stopwatch.GetTimestamp();
+
         try
         {
-            RemoteEntry entry = Await(_provider.GetAsync(ToRemotePath(fileName)));
+            RemoteEntry entry = Await(_provider.GetAsync(path));
 
             fileAttributes = AttributesOf(entry);
 
@@ -177,10 +207,26 @@ public sealed class WinDavFileSystem : FileSystemBase
                 securityDescriptor = _security;
             }
 
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug("Asked about {Path} in {Elapsed} ms.", path, Elapsed(started));
+            }
+
             return STATUS_SUCCESS;
         }
         catch (ProviderException exception)
         {
+            // Debug and not warning: a name that is not there is the ordinary answer to this
+            // question, and it is asked for several of them per window.
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug(
+                    "Asked about {Path} in {Elapsed} ms: {Reason}.",
+                    path,
+                    Elapsed(started),
+                    exception.Error);
+            }
+
             return ProviderStatus.From(exception);
         }
     }
@@ -205,6 +251,7 @@ public sealed class WinDavFileSystem : FileSystemBase
         normalizedName = null;
 
         string path = ToRemotePath(fileName);
+        long started = Stopwatch.GetTimestamp();
 
         try
         {
@@ -224,16 +271,30 @@ public sealed class WinDavFileSystem : FileSystemBase
             // where the caller has stopped listening and Windows drops the reason.
             if ((createOptions & FILE_DELETE_ON_CLOSE) != 0)
             {
-                return STATUS_MEDIA_WRITE_PROTECTED;
+                return Refused("Open with delete on close");
             }
 
             fileDesc = new OpenEntry(path, entry);
             fileInfo = ToFileInfo(entry);
 
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug("Opened {Path} in {Elapsed} ms.", path, Elapsed(started));
+            }
+
             return STATUS_SUCCESS;
         }
         catch (ProviderException exception)
         {
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug(
+                    "Opening {Path} failed after {Elapsed} ms: {Reason}.",
+                    path,
+                    Elapsed(started),
+                    exception.Error);
+            }
+
             return ProviderStatus.From(exception);
         }
     }
@@ -291,16 +352,49 @@ public sealed class WinDavFileSystem : FileSystemBase
             wanted = Math.Min(wanted, size - (long)offset);
         }
 
+        // Before the wait, so that a read which never comes back has still said what it was
+        // after. That is the difference between trace and debug on this side.
+        if (_log.IsEnabled(LogLevel.Trace))
+        {
+            _log.LogTrace("Reading {Wanted} bytes of {Path} at {Offset}.", wanted, open.Path, offset);
+        }
+
+        long started = Stopwatch.GetTimestamp();
+
         try
         {
             using Stream stream = Await(_provider.OpenReadAsync(open.Path, (long)offset, wanted));
 
             bytesTransferred = CopyInto(stream, buffer, (uint)wanted);
 
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug(
+                    "Read {Wanted} bytes of {Path} at {Offset}, {Transferred} back in {Elapsed} ms.",
+                    wanted,
+                    open.Path,
+                    offset,
+                    bytesTransferred,
+                    Elapsed(started));
+            }
+
             return bytesTransferred == 0 ? STATUS_END_OF_FILE : STATUS_SUCCESS;
         }
         catch (ProviderException exception)
         {
+            // Warning, unlike the questions above: a read that fails is an error Windows puts
+            // in front of whoever asked for the file, and the reason for it belongs in the
+            // file whether a recording was asked for or not.
+            if (_log.IsEnabled(LogLevel.Warning))
+            {
+                _log.LogWarning(
+                    exception,
+                    "Reading {Path} at {Offset} failed after {Elapsed} ms.",
+                    open.Path,
+                    offset,
+                    Elapsed(started));
+            }
+
             return ProviderStatus.From(exception);
         }
     }
@@ -335,7 +429,22 @@ public sealed class WinDavFileSystem : FileSystemBase
 
         if (context is not DirectoryScan scan)
         {
-            scan = new DirectoryScan(ChildrenOf(open.Path, marker));
+            long started = Stopwatch.GetTimestamp();
+
+            // What is counted is what was fetched, which for an enumeration that was resumed
+            // is what is left after the marker rather than the whole directory.
+            List<RemoteEntry> children = ChildrenOf(open.Path, marker);
+
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug(
+                    "Listed {Count} entries of {Path} in {Elapsed} ms.",
+                    children.Count,
+                    open.Path,
+                    Elapsed(started));
+            }
+
+            scan = new DirectoryScan(children);
             context = scan;
         }
 
@@ -346,6 +455,11 @@ public sealed class WinDavFileSystem : FileSystemBase
 
         fileName = child.Name;
         fileInfo = ToFileInfo(child);
+
+        if (_log.IsEnabled(LogLevel.Trace))
+        {
+            _log.LogTrace("Handed {Name} of {Path} back.", child.Name, open.Path);
+        }
 
         return true;
     }
@@ -392,7 +506,7 @@ public sealed class WinDavFileSystem : FileSystemBase
         fileInfo = default;
         normalizedName = null;
 
-        return STATUS_MEDIA_WRITE_PROTECTED;
+        return Refused(nameof(Create));
     }
 
     /// <inheritdoc/>
@@ -406,7 +520,7 @@ public sealed class WinDavFileSystem : FileSystemBase
     {
         fileInfo = default;
 
-        return STATUS_MEDIA_WRITE_PROTECTED;
+        return Refused(nameof(Overwrite));
     }
 
     /// <inheritdoc/>
@@ -424,7 +538,7 @@ public sealed class WinDavFileSystem : FileSystemBase
         bytesTransferred = 0;
         fileInfo = default;
 
-        return STATUS_MEDIA_WRITE_PROTECTED;
+        return Refused(nameof(Write));
     }
 
     /// <inheritdoc/>
@@ -440,7 +554,7 @@ public sealed class WinDavFileSystem : FileSystemBase
     {
         fileInfo = default;
 
-        return STATUS_MEDIA_WRITE_PROTECTED;
+        return Refused(nameof(SetBasicInfo));
     }
 
     /// <inheritdoc/>
@@ -453,13 +567,13 @@ public sealed class WinDavFileSystem : FileSystemBase
     {
         fileInfo = default;
 
-        return STATUS_MEDIA_WRITE_PROTECTED;
+        return Refused(nameof(SetFileSize));
     }
 
     // Also the answer to SetDelete, which WinFsp hands on to this.
     /// <inheritdoc/>
     public override int CanDelete(object? fileNode, object fileDesc, string fileName) =>
-        STATUS_MEDIA_WRITE_PROTECTED;
+        Refused(nameof(CanDelete));
 
     /// <inheritdoc/>
     public override int Rename(
@@ -467,19 +581,41 @@ public sealed class WinDavFileSystem : FileSystemBase
         object fileDesc,
         string fileName,
         string newFileName,
-        bool replaceIfExists) => STATUS_MEDIA_WRITE_PROTECTED;
+        bool replaceIfExists) => Refused(nameof(Rename));
 
     /// <inheritdoc/>
     public override int SetSecurity(
         object? fileNode,
         object fileDesc,
         AccessControlSections sections,
-        byte[] securityDescriptor) => STATUS_MEDIA_WRITE_PROTECTED;
+        byte[] securityDescriptor) => Refused(nameof(SetSecurity));
 
     /// <inheritdoc/>
     public override int SetVolumeLabel(string volumeLabel, out VolumeInfo volumeInfo)
     {
         volumeInfo = default;
+
+        return Refused(nameof(SetVolumeLabel));
+    }
+
+    // == What is written down ==
+
+    // The always-on levels are the mount going up and coming down, which ProviderMount
+    // writes, and a read that failed. Everything else here is one of the two levels that are
+    // switched on for a while: debug for what was asked of the store, with what it cost, and
+    // trace for the steps in between. See decisions.md 74.
+
+    private static string Elapsed(long started) =>
+        Stopwatch.GetElapsedTime(started).TotalMilliseconds.ToString(ElapsedFormat, CultureInfo.InvariantCulture);
+
+    // "The drive is read only" is the first thing a person asks about, and Windows' own
+    // wording for it names no operation, so the operation is named here.
+    private int Refused(string operation)
+    {
+        if (_log.IsEnabled(LogLevel.Debug))
+        {
+            _log.LogDebug("Refused {Operation}: everything on this volume is read only.", operation);
+        }
 
         return STATUS_MEDIA_WRITE_PROTECTED;
     }

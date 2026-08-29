@@ -84,6 +84,43 @@ public sealed class LogFormatTests
             StringComparison.Ordinal);
     }
 
+    // A comment carries the time for the same reason a record does: what a recording covers
+    // is read off the two lines that open and close it.
+    [Fact]
+    public void ACommentIsTheTimeAndWhatIsBeingSaid() =>
+        Assert.Equal(
+            $"{LogFormat.CommentPrefix}2026-08-29T14:05:09.123+02:00  it began{LogFormat.LineEnd}",
+            LogFormat.Comment(s_when, "it began"));
+
+    [Fact]
+    public void ARecordingSaysWhatItRecordsAndWhereFrom() =>
+        Assert.Equal(
+            "recording debug of fs, http for 90 s or up to 16 MB",
+            LogFormat.RecordingStart(
+                LogLevel.Debug,
+                [LogArea.Fs, LogArea.Http],
+                TimeSpan.FromSeconds(90),
+                LogRecording.MaximumBytes));
+
+    // Seconds throughout, whatever the person typed: read as 120 s a duration is one
+    // subtraction away from the timestamps around it, read as 2 m it is two.
+    [Theory]
+    [InlineData(60, "60 s")]
+    [InlineData(120, "120 s")]
+    [InlineData(3600, "3600 s")]
+    public void HowLongARecordingMayRunIsSaidInSeconds(int seconds, string expected) =>
+        Assert.EndsWith(
+            $"for {expected} or up to 16 MB",
+            LogFormat.RecordingStart(LogLevel.Trace, LogAreas.All, TimeSpan.FromSeconds(seconds), LogRecording.MaximumBytes),
+            StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData(LogRecordingEnd.Duration, 3, "recording ended after 3 records, the time was up")]
+    [InlineData(LogRecordingEnd.Size, 1, "recording ended after 1 record, it had written as much as it may")]
+    [InlineData(LogRecordingEnd.Session, 0, "recording ended after 0 records, the session ended")]
+    public void ARecordingClosesWithTheReasonAndTheCount(LogRecordingEnd end, long records, string expected) =>
+        Assert.Equal(expected, LogFormat.RecordingEnd(end, records));
+
     // Every line is ended, so the last piece a split leaves is always empty.
     private static string[] Lines(string text)
     {

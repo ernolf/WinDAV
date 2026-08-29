@@ -56,6 +56,11 @@ public static class LogFormat
 
     private const string FieldSeparator = "  ";
 
+    // Whole where it is whole, and no more than three places where it is not.
+    private const string NumberFormat = "0.###";
+
+    private const long MegabyteFactor = 1024 * 1024;
+
     /// <summary>
     /// Builds the lines a file opens with.
     /// </summary>
@@ -94,6 +99,59 @@ public static class LogFormat
     /// <returns>One comment line, ended.</returns>
     public static string Footer(DateTimeOffset when, long records) =>
         $"{CommentPrefix}ended {Timestamp(when)} after {records.ToString(CultureInfo.InvariantCulture)} {(records == 1 ? "record" : "records")}{LineEnd}";
+
+    /// <summary>
+    /// Builds a line that says something about the file rather than about the product.
+    /// </summary>
+    /// <param name="when">When it is being said.</param>
+    /// <param name="text">What is being said.</param>
+    /// <returns>One comment line, ended.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="text"/> is null.</exception>
+    /// <remarks>
+    /// A comment carries the time for the same reason a record does: what a recording covers
+    /// is read off the two lines that open and close it.
+    /// </remarks>
+    public static string Comment(DateTimeOffset when, string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        return $"{CommentPrefix}{Timestamp(when)}{FieldSeparator}{text}{LineEnd}";
+    }
+
+    /// <summary>
+    /// Builds the text of the line a recording opens with.
+    /// </summary>
+    /// <param name="level">The level being recorded.</param>
+    /// <param name="areas">The areas it covers.</param>
+    /// <param name="duration">How long it may run.</param>
+    /// <param name="bytes">How much it may write.</param>
+    /// <returns>The text of a comment, without the prefix and without the end of the line.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="areas"/> is null.</exception>
+    /// <remarks>
+    /// Both limits are written down where the recording is, so that a file which stops in the
+    /// middle of something answers by itself why it did.
+    /// </remarks>
+    public static string RecordingStart(
+        LogLevel level,
+        IEnumerable<LogArea> areas,
+        TimeSpan duration,
+        long bytes)
+    {
+        ArgumentNullException.ThrowIfNull(areas);
+
+        string where = string.Join(", ", areas.Select(LogAreas.Name));
+
+        return $"recording {Name(level)} of {where} for {Seconds(duration)} or up to {Megabytes(bytes)}";
+    }
+
+    /// <summary>
+    /// Builds the text of the line a recording closes with.
+    /// </summary>
+    /// <param name="end">Why it stopped.</param>
+    /// <param name="records">How many records it wrote.</param>
+    /// <returns>The text of a comment, without the prefix and without the end of the line.</returns>
+    public static string RecordingEnd(LogRecordingEnd end, long records) =>
+        $"recording ended after {records.ToString(CultureInfo.InvariantCulture)} {(records == 1 ? "record" : "records")}, {Reason(end)}";
 
     /// <summary>
     /// Builds one record.
@@ -157,6 +215,24 @@ public static class LogFormat
 
     private static string Timestamp(DateTimeOffset when) =>
         when.ToString(TimestampFormat, CultureInfo.InvariantCulture);
+
+    // Seconds throughout, whatever the person typed. Two minutes read as 120 s is one
+    // subtraction away from the timestamps around it; read as 2 m it is two.
+    private static string Seconds(TimeSpan duration) =>
+        duration.TotalSeconds.ToString(NumberFormat, CultureInfo.InvariantCulture) + " s";
+
+    private static string Megabytes(long bytes) =>
+        (bytes / (double)MegabyteFactor).ToString(NumberFormat, CultureInfo.InvariantCulture) + " MB";
+
+    private static string Reason(LogRecordingEnd end) => end switch
+    {
+        LogRecordingEnd.Duration => "the time was up",
+        LogRecordingEnd.Size => "it had written as much as it may",
+
+        // None does not reach here. A recording is closed with the reason it was closed for,
+        // and the last of the three is the program ending underneath it.
+        _ => "the session ended",
+    };
 
     // The first line where it stands, every further line indented under it. A message with a
     // newline in it is rare and always worth keeping whole.

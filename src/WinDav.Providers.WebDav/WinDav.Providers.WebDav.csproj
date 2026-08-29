@@ -3,6 +3,12 @@
   <!-- The plain RFC 4918 provider. It exists to keep the seam honest: an abstraction
        with one implementation is not an abstraction. -->
 
+  <!-- The seam is named in the constructor of the factory, so it is asked for here rather
+       than taken from WinDav.Dav on the way past. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\WinDav.Abstractions\WinDav.Abstractions.csproj" />
     <ProjectReference Include="..\WinDav.Dav\WinDav.Dav.csproj" />
