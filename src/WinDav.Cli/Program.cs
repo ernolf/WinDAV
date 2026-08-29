@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 using System.ComponentModel;
+using Microsoft.Extensions.Logging;
 using WinDav.Abstractions;
 using WinDav.Core;
+using WinDav.Core.Logging;
 
 namespace WinDav.Cli;
 
@@ -36,9 +38,17 @@ internal static class Program
             cancellation.Cancel();
         };
 
+        // The file is not created until something is written to it, so a command that has
+        // nothing to say leaves nothing behind. The command line goes into the header, with
+        // anything in it that could be a credential taken out first.
+        using LogFile file = LogFile.Default(LogRedaction.CommandLine(args));
+        using FileLoggerFactory logging = new(file);
+
+        ILogger log = logging.CreateLogger(typeof(Program));
+
         try
         {
-            return await RunAsync(args, cancellation.Token).ConfigureAwait(false);
+            return await RunAsync(args, logging, cancellation.Token).ConfigureAwait(false);
         }
         catch (UsageException usage)
         {
@@ -58,32 +68,34 @@ internal static class Program
         }
         catch (ProviderException failure)
         {
-            return WriteFailure(Describe(failure));
+            // A credential the server did not accept and a server that answered badly both
+            // arrive here, and decision 74 has both always written down.
+            return WriteFailure(log, failure, Describe(failure));
         }
         catch (InvalidOperationException unopenable)
         {
             // A credential that is where it belongs and cannot be opened, which is what one
             // written by another user or carried over from another machine looks like.
-            return WriteFailure(unopenable.Message);
+            return WriteFailure(log, unopenable, unopenable.Message);
         }
         catch (TimeoutException expired)
         {
             // A login that was begun in the browser and not granted. The token the server
             // handed out is gone with it, and there is nothing to carry on from.
-            return WriteFailure(expired.Message);
+            return WriteFailure(log, expired, expired.Message);
         }
         catch (Win32Exception refused)
         {
             // Windows turned the mount down, and says why better than we could.
-            return WriteFailure(refused.Message);
+            return WriteFailure(log, refused, refused.Message);
         }
         catch (TypeInitializationException driver)
         {
-            return WriteDriverProblem(driver.InnerException ?? driver);
+            return WriteDriverProblem(log, driver.InnerException ?? driver);
         }
         catch (DllNotFoundException driver)
         {
-            return WriteDriverProblem(driver);
+            return WriteDriverProblem(log, driver);
         }
         catch (OperationCanceledException)
         {
@@ -92,7 +104,10 @@ internal static class Program
         }
     }
 
-    private static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
+    private static async Task<int> RunAsync(
+        string[] args,
+        ILoggerFactory logging,
+        CancellationToken cancellationToken)
     {
         CommandLine line = CommandLine.Parse(args);
 
@@ -117,7 +132,7 @@ internal static class Program
 
         if (string.Equals(line.Verb, "mount", StringComparison.Ordinal))
         {
-            return await MountCommand.RunAsync(line, cancellationToken).ConfigureAwait(false);
+            return await MountCommand.RunAsync(line, logging, cancellationToken).ConfigureAwait(false);
         }
 
         throw new UsageException($"There is no command named '{line.Verb}'.");
@@ -208,15 +223,21 @@ internal static class Program
         return Misused;
     }
 
-    private static int WriteFailure(string message)
+    // A misuse is not written down: a command line with a typo in it should leave nothing
+    // behind. A failure is, and this is the one place every one of them comes through.
+    private static int WriteFailure(ILogger log, Exception failure, string message)
     {
+        log.LogError(failure, "{Failure}", message);
+
         Console.Error.WriteLine(message);
 
         return Failed;
     }
 
-    private static int WriteDriverProblem(Exception driver)
+    private static int WriteDriverProblem(ILogger log, Exception driver)
     {
+        log.LogError(driver, "The WinFsp driver could not be loaded.");
+
         Console.Error.WriteLine(
             $"The WinFsp driver could not be loaded. {ProductInfo.Name} needs it installed; see https://winfsp.dev/.");
         Console.Error.WriteLine(driver.Message);

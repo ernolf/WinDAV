@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+using Microsoft.Extensions.Logging;
 using WinDav.Abstractions;
 using WinDav.Core;
 using WinDav.Core.Configuration;
+using WinDav.Core.Logging;
 using WinDav.Core.Providers;
 using WinDav.Core.Security;
 using WinDav.Fs;
@@ -42,9 +44,13 @@ internal static class MountCommand
     /// the configuration can have done to it.
     /// </summary>
     /// <param name="line">What was typed.</param>
+    /// <param name="logging">Where a mount going up and coming down is written down.</param>
     /// <param name="cancellationToken">Ends the mount.</param>
     /// <returns>The exit code.</returns>
-    internal static async Task<int> RunAsync(CommandLine line, CancellationToken cancellationToken)
+    internal static async Task<int> RunAsync(
+        CommandLine line,
+        ILoggerFactory logging,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(line);
 
@@ -58,11 +64,14 @@ internal static class MountCommand
             Add => await AddAsync(line, cancellationToken).ConfigureAwait(false),
             List => await ListAsync(line, cancellationToken).ConfigureAwait(false),
             Remove => await RemoveAsync(line, cancellationToken).ConfigureAwait(false),
-            _ => await MountAsync(line, cancellationToken).ConfigureAwait(false),
+            _ => await MountAsync(line, logging, cancellationToken).ConfigureAwait(false),
         };
     }
 
-    private static async Task<int> MountAsync(CommandLine line, CancellationToken cancellationToken)
+    private static async Task<int> MountAsync(
+        CommandLine line,
+        ILoggerFactory logging,
+        CancellationToken cancellationToken)
     {
         MountRequest request = MountRequest.Parse(line);
 
@@ -101,6 +110,23 @@ internal static class MountCommand
                 throw new UsageException($"'{request.RemotePath}' is a file, and a mount needs a directory.");
             }
 
+            // Written before the drive appears, so that a mount that never comes up has left
+            // behind what it was trying to reach. The address is redacted: one typed with a
+            // credential in it is the one way a password gets onto a command line.
+            ILogger log = logging.CreateLogger(typeof(MountCommand));
+
+            // Redacting an address is work, and a log that is switched off should not pay for
+            // it (CA1873).
+            if (log.IsEnabled(LogLevel.Information))
+            {
+                log.LogInformation(
+                    "Mounting {RemotePath} of {User} at {Server} over WinFsp {Driver}.",
+                    request.RemotePath,
+                    userId ?? "anonymous",
+                    LogRedaction.Server(server),
+                    driver);
+            }
+
             // The remote path went to the provider, which is rooted at it, so everything above
             // it is out of reach. Rooting the file system as well would apply it a second time.
             using ProviderMount mount = new(
@@ -112,7 +138,8 @@ internal static class MountCommand
                     VolumeLabel = label,
                     ExplorerName = label,
                     IconPath = request.IconPath,
-                });
+                },
+                logging);
 
             mount.Mount();
 
