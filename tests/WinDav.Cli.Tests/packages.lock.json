@@ -201,7 +201,7 @@
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.10, )",
           "WinDav.Abstractions": "[1.0.0, )",
           "WinDav.Core": "[1.0.0, )",
-          "winfsp.net": "[2.1.25156, )"
+          "winfsp.net": "[2.2.26215, )"
         }
       },
       "windav.providers.nextcloud": {
@@ -237,9 +237,9 @@
       },
       "winfsp.net": {
         "type": "CentralTransitive",
-        "requested": "[2.1.25156, )",
-        "resolved": "2.1.25156",
-        "contentHash": "i944/pi3wGPYabJ+42J2+txFchgJAHEoH6c9LgTkekCU/fKxUvdDEpxoGFE513X87pcSOPsEnU4BUOdsTHUttA==",
+        "requested": "[2.2.26215, )",
+        "resolved": "2.2.26215",
+        "contentHash": "h1jJSIUo5i+chxSo20zx3k/b6hIk1Cr/yF95nstn0YOkgZKXoDmN3/L090QsKDsUKoT4ec1buj0ZRnACkbI1BQ==",
         "dependencies": {
           "System.IO.FileSystem.AccessControl": "5.0.0"
         }
