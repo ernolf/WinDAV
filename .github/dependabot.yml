@@ -5,13 +5,27 @@ version: 2
 
 updates:
   # Package versions live in Directory.Packages.props; the lock files are updated with
-  # them, which is what keeps the locked-mode restore in CI honest.
+  # them, which is what keeps the locked-mode restore in CI honest. Dependabot writes only
+  # the lock files of the projects that name a package themselves, so accepting one of
+  # these takes a `dotnet restore WinDAV.slnx --force-evaluate` on top of it. See
+  # https://github.com/ernolf/WinDAV/wiki/Repository-Decisions#r16-a-nuget-update-is-not-finished-until-the-lock-files-are
   - package-ecosystem: nuget
     directory: /
     schedule:
       interval: weekly
     commit-message:
       prefix: chore
+    # One pull request per round rather than one per package. See
+    # https://github.com/ernolf/WinDAV/wiki/Repository-Decisions#r14-dependency-updates-arrive-as-one-pull-request-per-ecosystem
+    groups:
+      packages:
+        patterns:
+          - "*"
+    # The version of the binding is the minimum driver version a user has to install, so
+    # raising it raises the system requirement and is a release decision, not an update.
+    # See https://github.com/ernolf/WinDAV/wiki/Repository-Decisions#r15-the-winfsp-binding-is-raised-by-hand-not-by-dependabot
+    ignore:
+      - dependency-name: winfsp.net
 
   # Without this the pinned action SHAs would never move, and a pin nobody updates is
   # a dependency frozen at the day it was written.
@@ -21,3 +35,9 @@ updates:
       interval: weekly
     commit-message:
       prefix: chore
+    # Grouped for the same reason, and here it is not a matter of taste: init and analyze
+    # of the CodeQL action are two halves of one bump and fail apart.
+    groups:
+      actions:
+        patterns:
+          - "*"
