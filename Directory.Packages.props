@@ -28,7 +28,7 @@
   <!-- DPAPI. Out of band rather than in the shared framework, because it is Windows only;
        the one type that uses it says so with an attribute. See decisions.md 68. -->
   <ItemGroup Label="Security">
-    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.10" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
   </ItemGroup>
 
   <ItemGroup Label="Test">
