@@ -316,12 +316,18 @@ public abstract class DavStorageProvider : IStorageProvider
     protected static ProviderError Classify(HttpStatusCode? status) => status switch
     {
         HttpStatusCode.NotFound or HttpStatusCode.Gone => ProviderError.NotFound,
-        HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.Locked => ProviderError.PermissionDenied,
+        HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => ProviderError.PermissionDenied,
         HttpStatusCode.PreconditionFailed => ProviderError.PreconditionFailed,
         HttpStatusCode.Conflict => ProviderError.Conflict,
         HttpStatusCode.InsufficientStorage => ProviderError.InsufficientStorage,
-        HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout =>
-            ProviderError.Unreachable,
+
+        // Both are the server saying "not now" rather than "not you": 423 is a resource
+        // held, by a lock or by the server's own bookkeeping under load, and 503 is the
+        // server as a whole. A caller that reads them as a refusal of the credential would
+        // ask the person at the keyboard to fix something that is not wrong.
+        HttpStatusCode.Locked or HttpStatusCode.ServiceUnavailable => ProviderError.Busy,
+
+        HttpStatusCode.BadGateway or HttpStatusCode.GatewayTimeout => ProviderError.Unreachable,
 
         // No status at all means the request never got an answer: name resolution, the
         // connection or the handshake.

@@ -44,11 +44,13 @@ internal static class MountCommand
     /// the configuration can have done to it.
     /// </summary>
     /// <param name="line">What was typed.</param>
+    /// <param name="reads">How much the mount may fetch at a time, and how much at once.</param>
     /// <param name="logging">Where a mount going up and coming down is written down.</param>
     /// <param name="cancellationToken">Ends the mount.</param>
     /// <returns>The exit code.</returns>
     internal static async Task<int> RunAsync(
         CommandLine line,
+        ReadSettings reads,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
@@ -64,12 +66,13 @@ internal static class MountCommand
             Add => await AddAsync(line, cancellationToken).ConfigureAwait(false),
             List => await ListAsync(line, cancellationToken).ConfigureAwait(false),
             Remove => await RemoveAsync(line, cancellationToken).ConfigureAwait(false),
-            _ => await MountAsync(line, logging, cancellationToken).ConfigureAwait(false),
+            _ => await MountAsync(line, reads, logging, cancellationToken).ConfigureAwait(false),
         };
     }
 
     private static async Task<int> MountAsync(
         CommandLine line,
+        ReadSettings reads,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
@@ -138,6 +141,7 @@ internal static class MountCommand
                     VolumeLabel = label,
                     ExplorerName = label,
                     IconPath = request.IconPath,
+                    Read = reads,
                 },
                 logging);
 

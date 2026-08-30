@@ -60,6 +60,33 @@ public sealed class DavClientTests
         Assert.StartsWith("<?xml version=\"1.0\" encoding=\"utf-8\"?>", handler.Body, StringComparison.Ordinal);
     }
 
+    // Asked for, never relied on, and written on the request itself because
+    // HttpClient.DefaultRequestVersion reaches only the requests HttpClient builds for
+    // itself. RequestVersionOrLower is what keeps it a wish: a server that does not offer
+    // HTTP/2 answers over 1.1 and nothing here notices the difference (#26).
+    [Fact]
+    public async Task EveryRequestAsksForHttpTwoAndTakesWhateverItGets()
+    {
+        RecordingHandler asked = new(MultiStatus(Listing));
+        using HttpClient forPropFind = new(asked);
+
+        await new DavClient(forPropFind).PropFindAsync(s_folder, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpVersion.Version20, asked.Version);
+        Assert.Equal(HttpVersionPolicy.RequestVersionOrLower, asked.VersionPolicy);
+
+        RecordingHandler fetched = new(Body(HttpStatusCode.PartialContent, "brown"));
+        using HttpClient forGet = new(fetched);
+
+        using DavContent content = await new DavClient(forGet)
+            .GetRangeAsync(s_file, 10, 5, TestContext.Current.CancellationToken);
+
+        // The read path is the one that sends the most of them, so it is the one that would
+        // notice a request going out over 1.1 by accident.
+        Assert.Equal(HttpVersion.Version20, fetched.Version);
+        Assert.Equal(HttpVersionPolicy.RequestVersionOrLower, fetched.VersionPolicy);
+    }
+
     [Theory]
     [InlineData(DavDepth.Zero, "0")]
     [InlineData(DavDepth.One, "1")]
@@ -438,6 +465,10 @@ public sealed class DavClientTests
 
         public string? Body { get; private set; }
 
+        public Version? Version { get; private set; }
+
+        public HttpVersionPolicy? VersionPolicy { get; private set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Method = request.Method.Method;
@@ -447,6 +478,8 @@ public sealed class DavClientTests
             Overwrite = Header(request, "Overwrite");
             IfMatch = request.Headers.IfMatch.Count == 0 ? null : request.Headers.IfMatch.ToString();
             ContentType = request.Content?.Headers.ContentType?.ToString();
+            Version = request.Version;
+            VersionPolicy = request.VersionPolicy;
 
             if (request.Content is not null)
             {

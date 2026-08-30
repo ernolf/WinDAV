@@ -57,6 +57,11 @@ public static class ProviderStatus
         // one case, so the wording has to stay as broad as the case is.
         ProviderError.Unreachable => FileSystemBase.STATUS_UNEXPECTED_NETWORK_ERROR,
 
+        // Phrased "the network is busy", which is the one sentence Windows has for a server
+        // that answered and would not do the work. It reads as something to try again, which
+        // is what a 423 or a 503 is, and no other status Windows knows says that of a share.
+        ProviderError.Busy => FileSystemBase.STATUS_NETWORK_BUSY,
+
         ProviderError.Protocol => FileSystemBase.STATUS_IO_DEVICE_ERROR,
 
         _ => FileSystemBase.STATUS_UNEXPECTED_IO_ERROR,

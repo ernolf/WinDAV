@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-using System.Buffers;
 using System.Diagnostics;
 using System.Globalization;
-using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using Fsp;
 using Microsoft.Extensions.Logging;
@@ -66,8 +64,6 @@ public sealed class WinDavFileSystem : FileSystemBase
     // soon enough to watch a large upload eat into a quota.
     private const uint VolumeInfoTimeoutMilliseconds = 10000;
 
-    private const int TransferBufferSize = 64 * 1024;
-
     // Milliseconds with one place, the same as the wire records are written with, so that a
     // read and the requests underneath it can be laid side by side.
     private const string ElapsedFormat = "0.#";
@@ -78,6 +74,7 @@ public sealed class WinDavFileSystem : FileSystemBase
     private readonly IStorageProvider _provider;
     private readonly MountSettings _settings;
     private readonly ILogger _log;
+    private readonly ReadLayer _reads;
     private readonly byte[] _security;
     private readonly ulong _mountTime = (ulong)DateTime.UtcNow.ToFileTimeUtc();
 
@@ -107,6 +104,7 @@ public sealed class WinDavFileSystem : FileSystemBase
         _provider = provider;
         _settings = settings;
         _log = loggerFactory?.CreateLogger(typeof(WinDavFileSystem)) ?? NullLogger.Instance;
+        _reads = new ReadLayer(provider, settings.Read, _log);
         _root = NormaliseRoot(settings.RemotePath);
 
         RawSecurityDescriptor descriptor = new(RootSddl);
@@ -274,7 +272,7 @@ public sealed class WinDavFileSystem : FileSystemBase
                 return Refused("Open with delete on close");
             }
 
-            fileDesc = new OpenEntry(path, entry);
+            fileDesc = new OpenEntry(path, entry, _reads.Open(path, entry.Length));
             fileInfo = ToFileInfo(entry);
 
             if (_log.IsEnabled(LogLevel.Debug))
@@ -363,9 +361,9 @@ public sealed class WinDavFileSystem : FileSystemBase
 
         try
         {
-            using Stream stream = Await(_provider.OpenReadAsync(open.Path, (long)offset, wanted));
-
-            bytesTransferred = CopyInto(stream, buffer, (uint)wanted);
+            // What is written down here is what Windows asked for and how long it waited.
+            // Whether that cost a request, and which one, is the read layer's own record.
+            bytesTransferred = (uint)open.Window.Read((long)offset, wanted, buffer);
 
             if (_log.IsEnabled(LogLevel.Debug))
             {
@@ -396,6 +394,18 @@ public sealed class WinDavFileSystem : FileSystemBase
             }
 
             return ProviderStatus.From(exception);
+        }
+    }
+
+    // The end of one handle, and the only reason this is here: the window it read through
+    // belongs to the mount's ceiling and has to go back, whether the file was read to the end
+    // or dropped after a kilobyte. Nothing else of ours outlives an open.
+    /// <inheritdoc/>
+    public override void Close(object? fileNode, object fileDesc)
+    {
+        if (fileDesc is OpenEntry open)
+        {
+            open.Window.Close();
         }
     }
 
@@ -678,39 +688,6 @@ public sealed class WinDavFileSystem : FileSystemBase
         return ticks < 0 ? fallback : (ulong)ticks;
     }
 
-    private static uint CopyInto(Stream stream, IntPtr buffer, uint length)
-    {
-        // The buffer belongs to WinFsp and is at most one transfer long, so the offset into
-        // it stays well inside what an Int32 holds.
-        byte[] chunk = ArrayPool<byte>.Shared.Rent(TransferBufferSize);
-
-        try
-        {
-            uint written = 0;
-
-            while (written < length)
-            {
-                int room = (int)Math.Min((uint)chunk.Length, length - written);
-                int read = stream.Read(chunk, 0, room);
-
-                if (read <= 0)
-                {
-                    break;
-                }
-
-                Marshal.Copy(chunk, 0, IntPtr.Add(buffer, (int)written), read);
-
-                written += (uint)read;
-            }
-
-            return written;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(chunk);
-        }
-    }
-
     private StorageSpace SpaceOfTheVolume()
     {
         try
@@ -790,11 +767,13 @@ public sealed class WinDavFileSystem : FileSystemBase
 
     // What an open handle carries: where the entry is in the store, and what it looked like
     // when it was opened. WinFsp keeps this for us and hands it back on every call.
-    private sealed class OpenEntry(string path, RemoteEntry entry)
+    private sealed class OpenEntry(string path, RemoteEntry entry, ReadWindow window)
     {
         public string Path { get; } = path;
 
         public RemoteEntry Entry { get; } = entry;
+
+        public ReadWindow Window { get; } = window;
     }
 
     // One walk through one directory listing, kept between calls to ReadDirectoryEntry.

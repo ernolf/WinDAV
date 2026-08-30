@@ -250,7 +250,7 @@ public sealed class LogSwitchesTests : IDisposable
     [InlineData(LogSwitches.TraceOption, "WINDAV_TRACE")]
     [InlineData(LogSwitches.ForOption, "WINDAV_FOR")]
     public void EachOptionHasItsVariable(string option, string expected) =>
-        Assert.Equal(expected, LogSwitches.Variable(option));
+        Assert.Equal(expected, WinDav.Cli.Switches.Variable(option));
 
     // Nothing here reads the environment of the process it runs in: a machine that has one of
     // the four variables set is not a machine where these tests say something else.

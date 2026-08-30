@@ -17,6 +17,7 @@ public sealed class ProviderStatusTests
     [InlineData(ProviderError.Conflict, FileSystemBase.STATUS_OBJECT_PATH_NOT_FOUND)]
     [InlineData(ProviderError.InsufficientStorage, FileSystemBase.STATUS_DISK_FULL)]
     [InlineData(ProviderError.Unreachable, FileSystemBase.STATUS_UNEXPECTED_NETWORK_ERROR)]
+    [InlineData(ProviderError.Busy, FileSystemBase.STATUS_NETWORK_BUSY)]
     [InlineData(ProviderError.Protocol, FileSystemBase.STATUS_IO_DEVICE_ERROR)]
     [InlineData(ProviderError.Unknown, FileSystemBase.STATUS_UNEXPECTED_IO_ERROR)]
     public void EachFailureKeepsTheStatusItStandsFor(ProviderError error, int status) =>

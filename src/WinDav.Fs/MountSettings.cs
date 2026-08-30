@@ -74,4 +74,14 @@ public sealed class MountSettings
     /// ours left in their registry.
     /// </remarks>
     public string? IconPath { get; init; }
+
+    /// <summary>
+    /// Gets how much the mount may fetch ahead of a read, how much of it it may hold, and how
+    /// many requests it may have on the wire at once.
+    /// </summary>
+    /// <remarks>
+    /// Every one of the three is a permission and none of them is a promise. The defaults are
+    /// what was measured against a real server; leaving this out takes them.
+    /// </remarks>
+    public ReadSettings Read { get; init; } = new();
 }
