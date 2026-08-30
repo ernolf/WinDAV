@@ -283,8 +283,11 @@ public sealed class WinDavFileSystemTests
 
         Assert.Equal(FileSystemBase.STATUS_SUCCESS, Read(fileSystem, fileDesc, 2, 64, out byte[] taken));
         Assert.Equal("llo", Encoding.UTF8.GetString(taken));
-        Assert.Equal(2L, store.LastOffset);
-        Assert.Equal(3L, store.LastCount);
+
+        // Never past the end, whatever was asked for. A file this small fits in the window
+        // and is fetched whole from its start, so the range is the file.
+        Assert.Equal(0L, store.LastOffset);
+        Assert.Equal(5L, store.LastCount);
     }
 
     [Fact]

@@ -91,9 +91,7 @@ public sealed class DavClient
 
         request.Headers.Add("Depth", DepthHeader(depth));
 
-        using HttpResponseMessage response = await _httpClient
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
+        using HttpResponseMessage response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
 
         // A PROPFIND that worked answers 207 and nothing else. Anything in the 2xx range
         // means the server did not do what was asked, so it is as much of a failure as a
@@ -172,9 +170,7 @@ public sealed class DavClient
         using HttpRequestMessage request = new(HttpMethod.Get, uri);
         request.Headers.Range = range;
 
-        HttpResponseMessage response = await _httpClient
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
+        HttpResponseMessage response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
 
         try
         {
@@ -405,14 +401,32 @@ public sealed class DavClient
         }
     }
 
+    // Every request of this client goes out through here, which is the one place the wish
+    // for HTTP/2 can be written down: HttpClient.DefaultRequestVersion reaches only the
+    // requests HttpClient builds for itself, and every request here is built by hand.
+    //
+    // Asked for, never relied on. Where a server offers it, the requests of one mount share
+    // a connection instead of queueing for one; where it does not, RequestVersionOrLower
+    // sends the same request over 1.1 and nothing notices. Nothing above this may assume it
+    // was granted: over the same ranges 1.1 moved 16.99 MB/s against HTTP/2's 20.30, with
+    // the same time to the first byte, because that time is the server deciding the request
+    // is allowed and not the transport (#26).
+    private Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        request.Version = HttpVersion.Version20;
+        request.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+
+        // The headers, never the body: a read must be able to begin while the bytes are
+        // still coming, and the body of a PROPFIND is read out a moment later anyway.
+        return _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+    }
+
     private async Task<HttpResponseMessage> SendExpectingAsync(
         HttpRequestMessage request,
         HttpStatusCode[] expected,
         CancellationToken cancellationToken)
     {
-        HttpResponseMessage response = await _httpClient
-            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
+        HttpResponseMessage response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
 
         if (Array.IndexOf(expected, response.StatusCode) < 0)
         {

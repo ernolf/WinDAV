@@ -23,6 +23,10 @@ internal sealed class FakeStore : IStorageProvider
     // What the file system asked to read, in the store's own spelling.
     public List<string> Opened { get; } = [];
 
+    // Every range that was asked for, in order. One entry is one request, which is what a
+    // test about the read path counts.
+    public List<(long Offset, long? Count)> Reads { get; } = [];
+
     public long LastOffset { get; private set; }
 
     public long? LastCount { get; private set; }
@@ -53,6 +57,23 @@ internal sealed class FakeStore : IStorageProvider
         };
 
         _content[path] = bytes;
+    }
+
+    // A file worth reading in pieces. Every byte says where it is, so a test can tell a
+    // window served from the wrong place from one served from the right one.
+    public byte[] AddFileOfSize(string path, int length)
+    {
+        byte[] bytes = new byte[length];
+
+        for (int index = 0; index < length; index++)
+        {
+            bytes[index] = (byte)(index % 251);
+        }
+
+        _entries[path] = new RemoteEntry(path, false) { Length = length };
+        _content[path] = bytes;
+
+        return bytes;
     }
 
     // A file the store lists without saying how long it is, which a WebDAV server is
@@ -108,6 +129,7 @@ internal sealed class FakeStore : IStorageProvider
         Fail();
 
         Opened.Add(path);
+        Reads.Add((offset, count));
         LastOffset = offset;
         LastCount = count;
 

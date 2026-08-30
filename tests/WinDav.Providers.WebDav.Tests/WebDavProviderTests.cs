@@ -415,10 +415,10 @@ public sealed class WebDavProviderTests
     [InlineData(HttpStatusCode.NotFound, ProviderError.NotFound)]
     [InlineData(HttpStatusCode.Unauthorized, ProviderError.PermissionDenied)]
     [InlineData(HttpStatusCode.Forbidden, ProviderError.PermissionDenied)]
-    [InlineData(HttpStatusCode.Locked, ProviderError.PermissionDenied)]
+    [InlineData(HttpStatusCode.Locked, ProviderError.Busy)]
     [InlineData(HttpStatusCode.Conflict, ProviderError.Conflict)]
     [InlineData(HttpStatusCode.InsufficientStorage, ProviderError.InsufficientStorage)]
-    [InlineData(HttpStatusCode.ServiceUnavailable, ProviderError.Unreachable)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, ProviderError.Busy)]
     [InlineData(HttpStatusCode.NotImplemented, ProviderError.Unknown)]
     public async Task AStatusBecomesTheCaseItStandsFor(HttpStatusCode status, ProviderError expected)
     {

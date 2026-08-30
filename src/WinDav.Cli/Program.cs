@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using WinDav.Abstractions;
 using WinDav.Core;
 using WinDav.Core.Logging;
+using WinDav.Fs;
 
 namespace WinDav.Cli;
 
@@ -40,6 +41,7 @@ internal static class Program
 
         CommandLine line;
         LogSwitches switches;
+        ReadSettings reads;
 
         // Before anything is opened, because a recording asked for in a way that cannot be
         // read is a command line to correct, and a command line to correct leaves no file.
@@ -47,6 +49,7 @@ internal static class Program
         {
             line = CommandLine.Parse(args);
             switches = LogSwitches.Read(line);
+            reads = ReadSwitches.Read(line);
         }
         catch (UsageException usage)
         {
@@ -68,7 +71,7 @@ internal static class Program
 
         try
         {
-            int status = await RunAsync(line, logging, cancellation.Token).ConfigureAwait(false);
+            int status = await RunAsync(line, reads, logging, cancellation.Token).ConfigureAwait(false);
 
             // The command line itself is in the header of the file. What is worth a record of
             // its own is what came of it, because a command that answered nothing and one that
@@ -136,6 +139,7 @@ internal static class Program
 
     private static async Task<int> RunAsync(
         CommandLine line,
+        ReadSettings reads,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
@@ -160,7 +164,7 @@ internal static class Program
 
         if (string.Equals(line.Verb, "mount", StringComparison.Ordinal))
         {
-            return await MountCommand.RunAsync(line, logging, cancellationToken).ConfigureAwait(false);
+            return await MountCommand.RunAsync(line, reads, logging, cancellationToken).ConfigureAwait(false);
         }
 
         throw new UsageException($"There is no command named '{line.Verb}'.");
@@ -214,6 +218,10 @@ internal static class Program
               --debug [areas]      Also write what was done, for a while.
               --trace [areas]      Also write every step of it, which is a great deal more.
               --for <time>         How long that lasts: 90s, 5m, 1h. Default: 60s, at most 1h.
+              --read-ahead <size>  How much a mount may fetch at a time: 8m, or off.
+              --read-ahead-total <size>
+                                   How much of that all open handles may hold: 64m, or off.
+              --requests <count>   How many requests may be on the wire at once: 2, or off.
 
             What was done and what failed is written to %LOCALAPPDATA%\{ProductInfo.Slug}\logs
             whether anything was asked for or not, and --log off stops that: nothing is
@@ -224,8 +232,22 @@ internal static class Program
             time is up or when it has written 16 MB, and the file says which of the two it
             was; nothing starts it again. What --log asks for has no such end: it lasts as
             long as the command does.
-            All four are read from the environment as well, as {LogSwitches.Variable(LogSwitches.LevelOption)}, {LogSwitches.Variable(LogSwitches.DebugOption)},
-            {LogSwitches.Variable(LogSwitches.TraceOption)} and {LogSwitches.Variable(LogSwitches.ForOption)}; an option wins over its variable.
+            All four are read from the environment as well, as {Switches.Variable(LogSwitches.LevelOption)}, {Switches.Variable(LogSwitches.DebugOption)},
+            {Switches.Variable(LogSwitches.TraceOption)} and {Switches.Variable(LogSwitches.ForOption)}; an option wins over its variable.
+
+            A request costs the same quarter second whether it asks for a kilobyte or eight
+            megabytes, so --read-ahead is how much a mount may fetch at a time: where a read
+            continues where the last one ended, it may fetch that much and keep it for the
+            handle that asked. A read that lands anywhere else, and a read larger than that,
+            is a request of its own. --read-ahead-total is the ceiling over all open handles
+            together, and a handle that finds it used up reads without a window rather than
+            waiting for one. --requests is how many may be on the wire at the same time; a
+            mount lowers it itself when the server answers that it is busy, and raises it
+            again slowly. Sizes are bytes, or a number with k, m or g after it. Each of the
+            three takes off, and with all three off every read is one request for exactly
+            what was read and nothing is kept between them.
+            These three are read from the environment as well, as {Switches.Variable(ReadSwitches.WindowOption)},
+            {Switches.Variable(ReadSwitches.TotalOption)} and {Switches.Variable(ReadSwitches.RequestsOption)}.
 
             The password is asked for, so that it stays out of the history of the shell.
             An account is written to the configuration; its credential is kept apart from it,
@@ -299,6 +321,7 @@ internal static class Program
             ProviderError.PermissionDenied => "The server did not accept the credential.",
             ProviderError.NotFound => "There is nothing at that path on the server.",
             ProviderError.Unreachable => "The server could not be reached.",
+            ProviderError.Busy => "The server is busy, or the file is held by somebody else.",
             ProviderError.Protocol => "The server answered in a way that could not be made sense of.",
             _ => "The store could not be read.",
         };

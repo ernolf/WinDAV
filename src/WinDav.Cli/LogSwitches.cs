@@ -3,7 +3,6 @@
 
 using System.Globalization;
 using Microsoft.Extensions.Logging;
-using WinDav.Core;
 using WinDav.Core.Logging;
 
 namespace WinDav.Cli;
@@ -84,19 +83,6 @@ internal sealed class LogSwitches
     internal TimeSpan Duration { get; }
 
     /// <summary>
-    /// Gets the name of the environment variable an option is also read from.
-    /// </summary>
-    /// <param name="option">One of the four options.</param>
-    /// <returns>The name, in the shape <c>WINDAV_LOG</c>.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="option"/> is null.</exception>
-    internal static string Variable(string option)
-    {
-        ArgumentNullException.ThrowIfNull(option);
-
-        return $"{ProductInfo.Slug}_{option.TrimStart('-')}".ToUpperInvariant();
-    }
-
-    /// <summary>
     /// Reads the four options and takes them out of the command line.
     /// </summary>
     /// <param name="line">What was typed.</param>
@@ -117,10 +103,10 @@ internal sealed class LogSwitches
 
         Func<string, string?> read = environment ?? Environment.GetEnvironmentVariable;
 
-        bool floor = Asked(line, LevelOption, read, out string? levelName);
-        bool debug = Asked(line, DebugOption, read, out string? debugAreas);
-        bool trace = Asked(line, TraceOption, read, out string? traceAreas);
-        bool timed = Asked(line, ForOption, read, out string? duration);
+        bool floor = Switches.Asked(line, LevelOption, read, out string? levelName);
+        bool debug = Switches.Asked(line, DebugOption, read, out string? debugAreas);
+        bool trace = Switches.Asked(line, TraceOption, read, out string? traceAreas);
+        bool timed = Switches.Asked(line, ForOption, read, out string? duration);
 
         LogLevel minimum = floor ? ReadLevel(levelName) : LogLevels.Default;
 
@@ -167,32 +153,6 @@ internal sealed class LogSwitches
     /// </returns>
     internal LogRecording? Start(LogFile file) =>
         Level is null ? null : new LogRecording(file, Level.Value, Areas, Duration);
-
-    // The option first, and the variable only where the option is not. What is written on the
-    // command line is written for this one run; what is in the environment was put there for
-    // whatever runs there, and the more particular of the two wins.
-    private static bool Asked(
-        CommandLine line,
-        string option,
-        Func<string, string?> environment,
-        out string? value)
-    {
-        if (line.Take(option, out value))
-        {
-            return true;
-        }
-
-        value = environment(Variable(option));
-
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            value = null;
-
-            return false;
-        }
-
-        return true;
-    }
 
     private static LogLevel ReadLevel(string? value)
     {

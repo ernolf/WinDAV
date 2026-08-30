@@ -43,6 +43,13 @@ public enum ProviderError
     /// <summary>The store could not be reached at all.</summary>
     Unreachable,
 
+    /// <summary>
+    /// The store was reached and the caller is allowed, and it still refused: it is doing
+    /// too much at once, or the resource is held by somebody else for the moment. Asking
+    /// again later is the answer; asking harder is not.
+    /// </summary>
+    Busy,
+
     /// <summary>The store answered, but not in a way that can be made sense of.</summary>
     Protocol,
 }
