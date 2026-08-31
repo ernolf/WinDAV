@@ -23,7 +23,7 @@ namespace WinDav.Cli;
 /// The defaults are what was measured in
 /// <see href="https://github.com/ernolf/WinDAV/issues/26">#26</see> and belong to
 /// <see cref="ReadSettings"/>; what is here is only the reading of what was typed. See
-/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions">decision 75</see>.
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#75-the-read-path-read-ahead-keep-attributes-briefly-and-let-the-server-set-the-width">decision 75</see>.
 /// </para>
 /// </remarks>
 internal static class ReadSwitches

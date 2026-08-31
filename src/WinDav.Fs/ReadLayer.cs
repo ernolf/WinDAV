@@ -25,7 +25,7 @@ namespace WinDav.Fs;
 /// <para>
 /// The mount owns this; a window belongs to an open handle and is handed out by
 /// <see cref="Open"/>. See
-/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions">decision 75</see>.
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#75-the-read-path-read-ahead-keep-attributes-briefly-and-let-the-server-set-the-width">decision 75</see>.
 /// </para>
 /// </remarks>
 internal sealed class ReadLayer

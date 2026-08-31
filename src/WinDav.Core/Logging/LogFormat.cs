@@ -18,9 +18,11 @@ namespace WinDav.Core.Logging;
 /// and it is enough for a person reading and for a script counting.
 /// </para>
 /// <para>
-/// Of everything decision 74 settles, this is the part that is expensive to take back, so it
-/// is deliberately dull: no quoting, no escaping, nothing that has to be understood before
-/// the first line can be read.
+/// Of everything
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#74-logging-five-levels-four-areas-and-a-switch-that-turns-itself-off">decision 74</see>
+/// settles, this is the part that is expensive to take back, so it is deliberately dull:
+/// no quoting, no escaping, nothing that has to be understood before the first line can
+/// be read.
 /// </para>
 /// </remarks>
 public static class LogFormat
@@ -36,8 +38,9 @@ public static class LogFormat
     public const string ContinuationPrefix = "  ";
 
     /// <summary>
-    /// The end of a line. LF, as decision 11 has it for everything else this repository
-    /// writes.
+    /// The end of a line. LF, as
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#11-lf-in-the-working-tree-on-every-platform">decision 11</see>
+    /// has it for everything else this repository writes.
     /// </summary>
     public const string LineEnd = "\n";
 

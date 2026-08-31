@@ -261,7 +261,7 @@ internal static class AccountCommand
     }
 
     // Named for what it is rather than for the seam it fits: choosing the store is what the
-    // program that runs is for, and this one has chosen. Decisions.md 68 says which and why.
+    // program that runs is for, and this one has chosen. Decision 68 says which and why.
     private static DpapiSecretStore Secrets() => DpapiSecretStore.Default();
 
     // Decision 71: the name this account authenticates as, which is the name it is known by

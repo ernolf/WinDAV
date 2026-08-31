@@ -10,10 +10,11 @@ namespace WinDav.Core.Logging;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Decision 60 keeps a password from being handed around at all, which leaves the log as the
-/// one place it could still surface. Nothing here guesses: each method is for one shape that
-/// is known to be able to hold a secret, and everything else is written out as it is. Paths
-/// and file names in particular are written out, because without them a record is worthless.
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#60-a-password-is-asked-for-never-passed-in">Decision 60</see>
+/// keeps a password from being handed around at all, which leaves the log as the one place
+/// it could still surface. Nothing here guesses: each method is for one shape that is known
+/// to be able to hold a secret, and everything else is written out as it is. Paths and file
+/// names in particular are written out, because without them a record is worthless.
 /// </para>
 /// <para>
 /// The marker is the wording Nextcloud uses in its own reports, so a reader who has seen one

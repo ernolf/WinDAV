@@ -40,8 +40,9 @@ internal static class NextcloudServer
     /// <param name="cancellationToken">Cancels the request.</param>
     /// <returns>The canonical user id, which is what goes into a path.</returns>
     /// <remarks>
-    /// Decision 71: the name in <c>remote.php/dav/files/&lt;userId&gt;</c> is the server's own
-    /// and not always the one the password was issued for.
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#71-four-names-for-an-account-uuid-id-userid-loginid">Decision 71</see>:
+    /// the name in <c>remote.php/dav/files/&lt;userId&gt;</c> is the server's own and not
+    /// always the one the password was issued for.
     /// </remarks>
     internal static async Task<string> ResolveUserIdAsync(
         Uri server,
