@@ -275,7 +275,7 @@ public sealed class AttributeCacheTests
 
         public void Add(string path) => _paths.Add(path);
 
-        public Task<IReadOnlyList<RemoteEntry>> ListAsync(
+        public Task<DirectoryListing> ListAsync(
             string path,
             CancellationToken cancellationToken = default)
         {
@@ -294,7 +294,9 @@ public sealed class AttributeCacheTests
                 }
             }
 
-            return Task.FromResult<IReadOnlyList<RemoteEntry>>(children);
+            // Nothing about the directory itself: a store is entitled to describe only what
+            // is in it, and the layer above has to hold up either way.
+            return Task.FromResult(new DirectoryListing(children));
         }
 
         public Task<RemoteEntry> GetAsync(string path, CancellationToken cancellationToken = default)

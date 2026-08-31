@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 using Microsoft.Extensions.Logging;
+using WinDav.Core.Providers;
 using Xunit;
 
-namespace WinDav.Fs.Tests;
+namespace WinDav.Core.Tests;
 
 // How many requests the mount lets out at once, and what a refusal does to that number. The
 // recovery interval is a parameter here so that the retreat can be watched without waiting

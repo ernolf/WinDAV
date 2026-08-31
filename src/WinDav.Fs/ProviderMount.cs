@@ -6,6 +6,7 @@ using Fsp;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinDav.Abstractions;
+using WinDav.Core.Providers;
 
 namespace WinDav.Fs;
 
@@ -55,16 +56,22 @@ public sealed class ProviderMount : IDisposable
     /// file system underneath was asked for. Nothing is written without one, which is what a
     /// test that only wants a mount asks for.
     /// </param>
+    /// <param name="gate">
+    /// The gate that says how many requests this mount may have on the wire, or
+    /// <see langword="null"/> for one built from the settings. Whoever built a layer under
+    /// the seam hands in the gate that layer is already asking.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public ProviderMount(
         IStorageProvider provider,
         MountSettings settings,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        RequestGate? gate = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
         _settings = settings;
-        _host = new FileSystemHost(new WinDavFileSystem(provider, settings, loggerFactory));
+        _host = new FileSystemHost(new WinDavFileSystem(provider, settings, loggerFactory, gate));
         _log = loggerFactory?.CreateLogger(typeof(ProviderMount)) ?? NullLogger.Instance;
     }
 

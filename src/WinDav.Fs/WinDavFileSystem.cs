@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinDav.Abstractions;
 using WinDav.Core;
+using WinDav.Core.Providers;
 using FileInfo = Fsp.Interop.FileInfo;
 using VolumeInfo = Fsp.Interop.VolumeInfo;
 
@@ -92,11 +93,17 @@ public sealed class WinDavFileSystem : FileSystemBase
     /// Where what Windows asked for is written down, or <see langword="null"/> for a file
     /// system that writes nothing, which is what a test that only wants answers asks for.
     /// </param>
+    /// <param name="gate">
+    /// The gate that says how many requests this mount may have on the wire, or
+    /// <see langword="null"/> for one built from the settings. A mount that has layers of its
+    /// own under the seam hands the one they all share in.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public WinDavFileSystem(
         IStorageProvider provider,
         MountSettings settings,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        RequestGate? gate = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(settings);
@@ -104,7 +111,7 @@ public sealed class WinDavFileSystem : FileSystemBase
         _provider = provider;
         _settings = settings;
         _log = loggerFactory?.CreateLogger(typeof(WinDavFileSystem)) ?? NullLogger.Instance;
-        _reads = new ReadLayer(provider, settings.Read, _log);
+        _reads = new ReadLayer(provider, settings.Read, _log, recovery: null, gate);
         _root = NormaliseRoot(settings.RemotePath);
 
         RawSecurityDescriptor descriptor = new(RootSddl);
@@ -722,7 +729,7 @@ public sealed class WinDavFileSystem : FileSystemBase
 
     private List<RemoteEntry> ChildrenOf(string path, string? marker)
     {
-        List<RemoteEntry> children = [.. Await(_provider.ListAsync(path))];
+        List<RemoteEntry> children = [.. Await(_provider.ListAsync(path)).Entries];
 
         // Ordinal and ignoring case, which is the search the volume declared in Init. The
         // order matters beyond looks: WinFsp resumes an interrupted enumeration by naming
