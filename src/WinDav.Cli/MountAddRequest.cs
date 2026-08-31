@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+using WinDav.Core;
+
 namespace WinDav.Cli;
 
 /// <summary>
@@ -92,13 +94,13 @@ internal sealed class MountAddRequest
         if (line.Arguments.Count > 2)
         {
             throw new UsageException(
-                $"'mount {MountCommand.Add}' writes one mount down, and '{line.Arguments[2]}' was read as a second name.");
+                $"'{ProductInfo.Slug} mount {MountCommand.Add}' writes one mount down, and '{line.Arguments[2]}' was read as a second name.");
         }
 
         if (line.Arguments.Count != 2)
         {
             throw new UsageException(
-                $"This command needs a name for the mount, as 'mount {MountCommand.Add} <mount> --account <account>'.");
+                $"This command needs a name for the mount, as '{ProductInfo.Slug} mount {MountCommand.Add} <mount> --account <account>'.");
         }
 
         string id = EnsureItCanBeNamed(line.Arguments[1]);

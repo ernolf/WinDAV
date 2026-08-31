@@ -94,7 +94,7 @@ internal static class MountCommand
         if (client is not null && request.Stored is { } stored)
         {
             request = MountRequest.OfStored(client.FindMount(stored)
-                ?? throw new UsageException($"There is no mount named '{stored}'. 'mount {List}' says which there are."));
+                ?? throw new UsageException($"There is no mount named '{stored}'. '{ProductInfo.Slug} mount {List}' says which there are."));
         }
 
         (IStorageConnection connection, Uri server, string? userId) =
@@ -265,7 +265,7 @@ internal static class MountCommand
 
         if (line.Arguments.Count != 2)
         {
-            throw new UsageException($"This command needs a mount, as 'mount {Remove} <mount>'.");
+            throw new UsageException($"This command needs a mount, as '{ProductInfo.Slug} mount {Remove} <mount>'.");
         }
 
         string asked = line.Arguments[1];
@@ -373,7 +373,7 @@ internal static class MountCommand
     {
         if (line.Arguments.Count > 1)
         {
-            throw new UsageException($"'mount {action}' takes nothing after it, and '{line.Arguments[1]}' was read as something.");
+            throw new UsageException($"'{ProductInfo.Slug} mount {action}' takes nothing after it, and '{line.Arguments[1]}' was read as something.");
         }
     }
 

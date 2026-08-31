@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+using WinDav.Core;
 using WinDav.Providers.Nextcloud;
 
 namespace WinDav.Cli;
@@ -74,7 +75,7 @@ internal sealed class AccountAddRequest
 
         if (line.Arguments.Count != 2)
         {
-            throw new UsageException("This command needs the address of a server, as 'account add <url>'.");
+            throw new UsageException($"This command needs the address of a server, as '{ProductInfo.Slug} account add <url>'.");
         }
 
         Uri server = ServerAddress.Read(line.Arguments[1]);

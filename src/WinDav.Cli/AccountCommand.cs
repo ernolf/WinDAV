@@ -42,14 +42,14 @@ internal static class AccountCommand
 
         string action = line.Arguments.Count > 0
             ? line.Arguments[0]
-            : throw new UsageException($"An account is added, listed or removed: '{Add}', '{List}', '{Remove}'.");
+            : throw new UsageException($"An account is added, listed or removed: '{ProductInfo.Slug} account <{Add}|{List}|{Remove}>'.");
 
         return action switch
         {
             Add => await AddAsync(line, cancellationToken).ConfigureAwait(false),
             List => await ListAsync(line, cancellationToken).ConfigureAwait(false),
             Remove => await RemoveAsync(line, cancellationToken).ConfigureAwait(false),
-            _ => throw new UsageException($"There is no 'account {action}'. There is {Add}, {List} and {Remove}."),
+            _ => throw new UsageException($"There is no '{ProductInfo.Slug} account {action}'. There is {Add}, {List} and {Remove}."),
         };
     }
 
@@ -222,7 +222,7 @@ internal static class AccountCommand
 
         if (line.Arguments.Count != 2)
         {
-            throw new UsageException($"This command needs an account, as 'account {Remove} <id|uuid>'.");
+            throw new UsageException($"This command needs an account, as '{ProductInfo.Slug} account {Remove} <id|uuid>'.");
         }
 
         string asked = line.Arguments[1];
@@ -319,7 +319,7 @@ internal static class AccountCommand
     {
         if (line.Arguments.Count > 1)
         {
-            throw new UsageException($"'account {action}' takes nothing after it, and '{line.Arguments[1]}' was read as something.");
+            throw new UsageException($"'{ProductInfo.Slug} account {action}' takes nothing after it, and '{line.Arguments[1]}' was read as something.");
         }
     }
 
