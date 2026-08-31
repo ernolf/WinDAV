@@ -420,7 +420,7 @@ internal static class MountCommand
     }
 
     private static void WriteAdded(string id, string account, string filePath) =>
-        Console.WriteLine($"The mount '{id}' of the account '{account}' is in {filePath}. Run it with 'mount {id}'.");
+        Console.WriteLine($"The mount '{id}' of the account '{account}' is in {filePath}. Run it with '{ProductInfo.Slug} mount {id}'.");
 
     private static void WriteRemoved(string id) =>
         Console.WriteLine($"The mount '{id}' is gone. The account it was made from is untouched.");
