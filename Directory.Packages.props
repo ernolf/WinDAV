@@ -13,20 +13,23 @@
 
   <!-- The WinFsp binding. It is pinned low on purpose: the driver it talks to has to be of
        the same major and no older minor, so this version is the least a user must install,
-       not the one they should. See decisions.md 56. -->
+       not the one they should. See decision 56:
+       https://github.com/ernolf/WinDAV/wiki/Decisions#56-winfsp-is-referenced-as-a-nuget-binding-the-driver-is-a-minimum-requirement -->
   <ItemGroup Label="File system">
     <PackageVersion Include="winfsp.net" Version="2.1.25156" />
   </ItemGroup>
 
   <!-- The logging seam. Two packages of pure interfaces: Abstractions pulls in exactly
        DependencyInjection.Abstractions on net10.0, and that one has no dependencies of its
-       own. The sink behind the seam is ours. See decisions.md 74. -->
+       own. The sink behind the seam is ours. See decision 74:
+       https://github.com/ernolf/WinDAV/wiki/Decisions#74-logging-five-levels-four-areas-and-a-switch-that-turns-itself-off -->
   <ItemGroup Label="Logging">
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
   </ItemGroup>
 
   <!-- DPAPI. Out of band rather than in the shared framework, because it is Windows only;
-       the one type that uses it says so with an attribute. See decisions.md 68. -->
+       the one type that uses it says so with an attribute. See decision 68:
+       https://github.com/ernolf/WinDAV/wiki/Decisions#68-two-secret-stores-behind-one-seam-dpapi-first -->
   <ItemGroup Label="Security">
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
   </ItemGroup>

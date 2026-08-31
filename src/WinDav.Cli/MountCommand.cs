@@ -21,7 +21,8 @@ namespace WinDav.Cli;
 /// that owns it. What runs unattended is a service, and that is a later matter; this is the
 /// command a person uses to see the thing work. What is written down is not made here: adding
 /// a mount asks nothing of a server, and running it by its name is the same mount as the one
-/// its options would have made. See decisions.md 73.
+/// its options would have made. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#73-a-mount-that-stays">decision 73</see>.
 /// </remarks>
 internal static class MountCommand
 {

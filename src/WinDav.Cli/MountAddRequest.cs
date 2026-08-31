@@ -10,7 +10,8 @@ namespace WinDav.Cli;
 /// The same options as a mount that is carried out, read the same way and by the same code;
 /// what differs is that nothing is asked of a server, because a mount that is written down is
 /// not a mount that is made. The account is named here and resolved by the command, which is
-/// what turns a name into the identity the file holds. See decisions.md 73.
+/// what turns a name into the identity the file holds. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#73-a-mount-that-stays">decision 73</see>.
 /// </remarks>
 internal sealed class MountAddRequest
 {

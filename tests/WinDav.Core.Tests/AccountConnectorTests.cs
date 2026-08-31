@@ -19,7 +19,7 @@ public sealed class AccountConnectorTests
 
     private static readonly Uri s_server = new("https://cloud.example.com/");
 
-    // What the mount points at, which decisions.md 71 keeps apart from what the account is
+    // What the mount points at, which decision 71 keeps apart from what the account is
     // called. Fixed, so that both halves of the sample can name it.
     private static readonly Guid s_account = new("2c9a7f10-84b3-4a7e-8f21-6d5c4b3a2910");
 

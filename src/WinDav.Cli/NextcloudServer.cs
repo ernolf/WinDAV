@@ -18,7 +18,8 @@ namespace WinDav.Cli;
 /// Adding an account and mounting one that was typed out both need the same two things: a
 /// client that names this program, and the canonical user id behind a login. They are here
 /// rather than in either command, because the same call written twice is two calls as soon
-/// as one of them is changed; decisions.md 72.
+/// as one of them is changed. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#72-mount-takes-an-account">decision 72</see>.
 /// </remarks>
 internal static class NextcloudServer
 {

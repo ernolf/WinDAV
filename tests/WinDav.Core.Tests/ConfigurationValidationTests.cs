@@ -364,7 +364,7 @@ public sealed class ConfigurationValidationTests : IDisposable
         Provider = "webdav",
     };
 
-    // Named by what the account is rather than by what it is called: decisions.md 71.
+    // Named by what the account is rather than by what it is called: decision 71.
     private static MountConfiguration Mount(string id, AccountConfiguration account) => new()
     {
         Id = id,

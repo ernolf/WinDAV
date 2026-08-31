@@ -21,7 +21,8 @@ internal static class ServerAddress
     /// By the scheme in front of it and by nothing else, so that a person can tell the two
     /// apart the same way: what carries a scheme is an address, whether or not it is one this
     /// program takes, and <see cref="Read"/> is what says which. A name that is not an address
-    /// is the name of a mount; decisions.md 73.
+    /// is the name of a mount. See
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#73-a-mount-that-stays">decision 73</see>.
     /// </remarks>
     internal static bool LooksLikeOne(string written)
     {

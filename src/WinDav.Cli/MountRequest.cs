@@ -15,9 +15,11 @@ namespace WinDav.Cli;
 /// a default that differs between two places as soon as there are two, and this is also what
 /// the tests can reach without a driver and without a server. What the store turns out to be
 /// is not known here: a mount either names an account, which holds it, or an address, whose
-/// user the server is asked about. The naming therefore waits for it; decisions.md 72.
+/// user the server is asked about. The naming therefore waits for it. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#72-mount-takes-an-account">decision 72</see>.
 /// A mount that names neither is one that is written down, and it becomes a request of this
-/// kind as soon as its line has been read; decisions.md 73.
+/// kind as soon as its line has been read. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#73-a-mount-that-stays">decision 73</see>.
 /// </remarks>
 internal sealed class MountRequest
 {
@@ -48,7 +50,7 @@ internal sealed class MountRequest
     /// </summary>
     /// <remarks>
     /// Set both by a request that has only the name yet and by the one built from the line it
-    /// found, which is what the rest of the mount is read out of; decisions.md 73.
+    /// found, which is what the rest of the mount is read out of; decision 73.
     /// </remarks>
     internal required string? Stored { get; init; }
 
@@ -75,8 +77,9 @@ internal sealed class MountRequest
     /// reached without one, and <see langword="null"/> when the account holds it.
     /// </summary>
     /// <remarks>
-    /// A login, not the user the store knows: decisions.md 71 keeps the two apart, and which
-    /// of them a server means by the name in a path is the server's to answer.
+    /// A login, not the user the store knows:
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#71-four-names-for-an-account-uuid-id-userid-loginid">decision 71</see> keeps the two apart, and which of them a
+    /// server means by the name in a path is the server's to answer.
     /// </remarks>
     internal required string? LoginId { get; init; }
 
@@ -194,7 +197,7 @@ internal sealed class MountRequest
     /// <remarks>
     /// Everything past this point treats the two alike: a stored mount is one whose values
     /// came out of a file rather than off a command line, and it reaches its store through the
-    /// account it names, exactly as a mount made with <c>--account</c> does; decisions.md 73.
+    /// account it names, exactly as a mount made with <c>--account</c> does; decision 73.
     /// </remarks>
     internal static MountRequest OfStored(MountConfiguration mount)
     {
@@ -205,7 +208,7 @@ internal sealed class MountRequest
             Stored = mount.Id,
 
             // The uuid, which is what the file holds and what the lookup takes as readily as
-            // a name; decisions.md 71.
+            // a name; decision 71.
             Account = mount.Account,
             Provider = null,
             Server = null,

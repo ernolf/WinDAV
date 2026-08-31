@@ -9,9 +9,11 @@ namespace WinDav.Core.Configuration;
 /// <remarks>
 /// What a mount needs to be made is here, and nothing else: where it reaches, where it
 /// appears and how it presents itself. A mount that is written down can say everything a
-/// mount that is typed out can say; decisions.md 73. Settings that need a project this build
-/// does not have — how many connections a mount may use, what is cached — arrive with it, so
-/// that no value can be set today and silently ignored.
+/// mount that is typed out can say. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#73-a-mount-that-stays">decision 73</see>.
+/// Settings that need a project this build does not have — how many connections a mount may
+/// use, what is cached — arrive with it, so that no value can be set today and silently
+/// ignored.
 /// </remarks>
 public sealed class MountConfiguration
 {
@@ -31,7 +33,8 @@ public sealed class MountConfiguration
     /// <remarks>
     /// The identity, not the name: an account that is renamed, or merged with the same
     /// account reached under another login, must not take its mounts down with it. The
-    /// command line takes the name and resolves it here. See decisions.md 71.
+    /// command line takes the name and resolves it here. See
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#71-four-names-for-an-account-uuid-id-userid-loginid">decision 71</see>.
     /// </remarks>
     public string Account { get; init; } = string.Empty;
 
@@ -66,7 +69,8 @@ public sealed class MountConfiguration
     /// </summary>
     /// <remarks>
     /// Derived when it is not given: the account at its server for a whole account, the name
-    /// of the folder for anything below it. See decisions.md 58.
+    /// of the folder for anything below it. See
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#58-the-name-and-the-icon-of-a-mount-belong-to-the-user">decision 58</see>.
     /// </remarks>
     public string? Label { get; init; }
 

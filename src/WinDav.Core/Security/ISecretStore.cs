@@ -11,7 +11,8 @@ namespace WinDav.Core.Security;
 /// A seam with more than one store behind it. <see cref="DpapiSecretStore"/> is what a
 /// plain installation uses; the credential manager is the second, for the profile that
 /// roams from one machine to the next. Which of them is used is a decision of the program
-/// that runs, and decisions.md 68 says why the file store is the one that came first.
+/// that runs. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#68-two-secret-stores-behind-one-seam-dpapi-first">decision 68</see> for why the file store is the one that came first.
 /// </para>
 /// <para>
 /// What a configuration holds is the reference — <see cref="Configuration.AccountConfiguration.SecretRef"/> —

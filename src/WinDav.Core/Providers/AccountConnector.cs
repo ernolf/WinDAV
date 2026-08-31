@@ -93,7 +93,8 @@ public sealed class AccountConnector
     /// <remarks>
     /// What the other overload does once it has looked both of them up. It is here in its own
     /// right because a mount that is asked for on the command line has an account and a path
-    /// and no entry in the configuration to be found under; decisions.md 72.
+    /// and no entry in the configuration to be found under. See
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#72-mount-takes-an-account">decision 72</see>.
     /// </remarks>
     /// <exception cref="InvalidDataException">
     /// The account has no server, or names a provider this build does not have.
@@ -153,7 +154,7 @@ public sealed class AccountConnector
     {
         foreach (AccountConfiguration account in configuration.Accounts)
         {
-            // By identity, not by name: decisions.md 71.
+            // By identity, not by name: decision 71.
             if (string.Equals(account.Uuid.ToString(), mount.Account, StringComparison.OrdinalIgnoreCase))
             {
                 return account;

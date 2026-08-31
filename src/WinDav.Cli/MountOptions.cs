@@ -12,7 +12,8 @@ namespace WinDav.Cli;
 /// In one place because a mount is asked for on two lines — the one that makes it and the one
 /// that writes it down — and a rule about how something is typed that stands in two places is
 /// two rules as soon as one of them is changed. The same reason <see cref="ServerAddress"/>
-/// exists; decisions.md 73.
+/// exists. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#73-a-mount-that-stays">decision 73</see>.
 /// </remarks>
 internal static class MountOptions
 {

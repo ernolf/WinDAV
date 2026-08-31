@@ -613,7 +613,7 @@ public sealed class WinDavFileSystem : FileSystemBase
     // The always-on levels are the mount going up and coming down, which ProviderMount
     // writes, and a read that failed. Everything else here is one of the two levels that are
     // switched on for a while: debug for what was asked of the store, with what it cost, and
-    // trace for the steps in between. See decisions.md 74.
+    // trace for the steps in between. See decision 74.
 
     private static string Elapsed(long started) =>
         Stopwatch.GetElapsedTime(started).TotalMilliseconds.ToString(ElapsedFormat, CultureInfo.InvariantCulture);
