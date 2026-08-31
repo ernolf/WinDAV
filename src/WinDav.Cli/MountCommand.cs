@@ -47,6 +47,7 @@ internal static class MountCommand
     /// <param name="line">What was typed.</param>
     /// <param name="reads">How much the mount may fetch at a time, and how much at once.</param>
     /// <param name="attributes">How long the mount may believe what it was told about an entry.</param>
+    /// <param name="directories">How far ahead the mount may list, and how much of it it may hold.</param>
     /// <param name="logging">Where a mount going up and coming down is written down.</param>
     /// <param name="cancellationToken">Ends the mount.</param>
     /// <returns>The exit code.</returns>
@@ -54,6 +55,7 @@ internal static class MountCommand
         CommandLine line,
         ReadSettings reads,
         TimeSpan attributes,
+        DirectorySettings directories,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
@@ -69,7 +71,7 @@ internal static class MountCommand
             Add => await AddAsync(line, cancellationToken).ConfigureAwait(false),
             List => await ListAsync(line, cancellationToken).ConfigureAwait(false),
             Remove => await RemoveAsync(line, cancellationToken).ConfigureAwait(false),
-            _ => await MountAsync(line, reads, attributes, logging, cancellationToken).ConfigureAwait(false),
+            _ => await MountAsync(line, reads, attributes, directories, logging, cancellationToken).ConfigureAwait(false),
         };
     }
 
@@ -77,6 +79,7 @@ internal static class MountCommand
         CommandLine line,
         ReadSettings reads,
         TimeSpan attributes,
+        DirectorySettings directories,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
@@ -107,10 +110,22 @@ internal static class MountCommand
             string label = request.LabelFor(server, userId);
             string? prefix = request.PrefixFor(server, userId);
 
+            // Decision 75: what a server will take is a property of the server and not of the
+            // layer that asks, so there is one gate for the whole mount and everything that
+            // sends counts against it. Written down where the file system writes, because
+            // that is where a width that has been lowered has been read up to now.
+            RequestGate gate = new(reads.Requests, logging.CreateLogger<WinDavFileSystem>());
+
             // Decision 75: what the server said about an entry is worth keeping for a moment,
             // because opening a file asks for it twice and a listing was told about every
             // sibling anyway. A lifetime of nothing leaves this out and asks every time.
             IStorageProvider provider = AttributeCache.Over(connection.Provider, attributes);
+
+            // Decision 76: over the attributes rather than under them, because a listing this
+            // hands back unasked is one nobody paid a request for, and what it says about
+            // every entry in it is what the layer below would have been told anyway. The same
+            // lifetime: it is the same request that vouches for both.
+            provider = DirectoryCache.Over(provider, attributes, directories, gate, cancellationToken);
 
             // One request before the drive appears, so that a wrong credential or a path that
             // is not there is a sentence here instead of an error in every window afterwards.
@@ -152,7 +167,8 @@ internal static class MountCommand
                     IconPath = request.IconPath,
                     Read = reads,
                 },
-                logging);
+                logging,
+                gate);
 
             mount.Mount();
 

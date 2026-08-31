@@ -289,7 +289,7 @@ public sealed class DavProviderFactoryTests
     // about; what that provider does is the provider's own tests.
     private sealed class StubProvider : IStorageProvider
     {
-        public Task<IReadOnlyList<RemoteEntry>> ListAsync(string path, CancellationToken cancellationToken) =>
+        public Task<DirectoryListing> ListAsync(string path, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
         public Task<RemoteEntry> GetAsync(string path, CancellationToken cancellationToken) =>

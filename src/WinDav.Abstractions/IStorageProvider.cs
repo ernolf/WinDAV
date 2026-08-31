@@ -24,11 +24,16 @@ public interface IStorageProvider
     /// </summary>
     /// <param name="path">The directory to list.</param>
     /// <param name="cancellationToken">Cancels the operation.</param>
-    /// <returns>Its entries, without the directory itself, in no particular order.</returns>
+    /// <returns>
+    /// Its entries, without the directory itself, and what the store said about the
+    /// directory where it said anything. A store that describes the directory along with
+    /// its contents hands that description on rather than dropping it, because a caller
+    /// that wants it would otherwise ask for what has already been answered.
+    /// </returns>
     /// <exception cref="ProviderException">
     /// <see cref="ProviderError.NotFound"/> when there is no such directory.
     /// </exception>
-    Task<IReadOnlyList<RemoteEntry>> ListAsync(string path, CancellationToken cancellationToken = default);
+    Task<DirectoryListing> ListAsync(string path, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Describes a single entry.

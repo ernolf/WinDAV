@@ -74,10 +74,27 @@ public sealed class WebDavProviderTests
         RecordingHandler handler = new(MultiStatus(Listing));
         using HttpClient httpClient = new(handler);
 
-        IReadOnlyList<RemoteEntry> entries = await Provider(httpClient)
+        DirectoryListing listing = await Provider(httpClient)
             .ListAsync("/", TestContext.Current.CancellationToken);
 
-        Assert.Equal(["/a note.txt", "/docs"], entries.Select(entry => entry.Path));
+        Assert.Equal(["/a note.txt", "/docs"], listing.Entries.Select(entry => entry.Path));
+    }
+
+    [Fact]
+    public async Task ListAsyncHandsBackWhatTheDirectoryItselfIs()
+    {
+        RecordingHandler handler = new(MultiStatus(Listing));
+        using HttpClient httpClient = new(handler);
+
+        DirectoryListing listing = await Provider(httpClient)
+            .ListAsync("/", TestContext.Current.CancellationToken);
+
+        // Depth 1 describes the collection along with its contents, and that description was
+        // paid for by the same request. A caller that wants it should not have to ask again.
+        RemoteEntry self = Assert.IsType<RemoteEntry>(listing.Self);
+
+        Assert.Equal("/", self.Path);
+        Assert.True(self.IsDirectory);
     }
 
     [Fact]
@@ -86,8 +103,10 @@ public sealed class WebDavProviderTests
         RecordingHandler handler = new(MultiStatus(Listing));
         using HttpClient httpClient = new(handler);
 
-        IReadOnlyList<RemoteEntry> entries = await Provider(httpClient)
+        DirectoryListing listing = await Provider(httpClient)
             .ListAsync("/", TestContext.Current.CancellationToken);
+
+        IReadOnlyList<RemoteEntry> entries = listing.Entries;
 
         RemoteEntry note = entries[0];
 
@@ -106,8 +125,8 @@ public sealed class WebDavProviderTests
     {
         using HttpClient httpClient = new(new RecordingHandler(MultiStatus(Listing)));
 
-        IReadOnlyList<RemoteEntry> entries = await Provider(httpClient)
-            .ListAsync("/", TestContext.Current.CancellationToken);
+        IReadOnlyList<RemoteEntry> entries = (await Provider(httpClient)
+            .ListAsync("/", TestContext.Current.CancellationToken)).Entries;
 
         // RFC 4918 has no property for either, and this provider invents nothing. Null is
         // the seam's way of saying so; see EntryPermissions on what it is not.

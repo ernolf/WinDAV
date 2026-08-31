@@ -99,24 +99,29 @@ public sealed class AttributeCache : IStorageProvider
     }
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<RemoteEntry>> ListAsync(
+    public async Task<DirectoryListing> ListAsync(
         string path,
         CancellationToken cancellationToken = default)
     {
-        // The listing itself is not held: it is the one question somebody is watching while
-        // it is answered, and a directory that shows what was in it a moment ago is the
-        // complaint this whole layer has to avoid.
-        IReadOnlyList<RemoteEntry> entries = await _inner.ListAsync(path, cancellationToken)
+        // The listing itself is not held here. Whether it is held at all is the business of
+        // the layer underneath, which is the one that can tell whether it still holds; what
+        // this one takes from a listing is what it was told about every entry in it.
+        DirectoryListing listing = await _inner.ListAsync(path, cancellationToken)
             .ConfigureAwait(false);
 
         Sweep();
 
-        foreach (RemoteEntry entry in entries)
+        if (listing.Self is RemoteEntry self)
+        {
+            Remember(self);
+        }
+
+        foreach (RemoteEntry entry in listing.Entries)
         {
             Remember(entry);
         }
 
-        return entries;
+        return listing;
     }
 
     /// <inheritdoc/>

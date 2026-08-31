@@ -4,7 +4,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
-namespace WinDav.Fs;
+namespace WinDav.Core.Providers;
 
 /// <summary>
 /// How many requests one mount may have on the wire at the same time, and what happens when
@@ -24,7 +24,7 @@ namespace WinDav.Fs;
 /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#75-the-read-path-read-ahead-keep-attributes-briefly-and-let-the-server-set-the-width">decision 75</see>.
 /// </para>
 /// </remarks>
-internal sealed class RequestGate
+public sealed class RequestGate
 {
     // How long the server has to keep taking requests before one more is allowed. Load is a
     // property of the moment rather than of how many requests have gone by since, so the
@@ -58,7 +58,7 @@ internal sealed class RequestGate
     /// <see langword="null"/> for the interval this class was built with.
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="log"/> is null.</exception>
-    internal RequestGate(int most, ILogger log, TimeSpan? recovery = null)
+    public RequestGate(int most, ILogger log, TimeSpan? recovery = null)
     {
         ArgumentNullException.ThrowIfNull(log);
 
@@ -73,7 +73,7 @@ internal sealed class RequestGate
     /// Gets how many are allowed at this moment, which is the width it was given until a
     /// server refuses one.
     /// </summary>
-    internal int Width
+    public int Width
     {
         get
         {
@@ -91,7 +91,7 @@ internal sealed class RequestGate
     /// Every call is answered by exactly one <see cref="Leave"/>, from a finally block, or
     /// the room is never given back.
     /// </remarks>
-    internal void Enter()
+    public void Enter()
     {
         lock (_sync)
         {
@@ -111,7 +111,7 @@ internal sealed class RequestGate
     /// Whether the store answered that it is busy. That is the one answer this reacts to: a
     /// missing file or a wrong credential says nothing about how much the server can take.
     /// </param>
-    internal void Leave(bool refused)
+    public void Leave(bool refused)
     {
         lock (_sync)
         {

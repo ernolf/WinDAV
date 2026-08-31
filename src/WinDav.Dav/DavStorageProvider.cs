@@ -74,7 +74,7 @@ public abstract class DavStorageProvider : IStorageProvider
     protected virtual IReadOnlyList<XName>? RequestedProperties => null;
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<RemoteEntry>> ListAsync(string path, CancellationToken cancellationToken = default)
+    public async Task<DirectoryListing> ListAsync(string path, CancellationToken cancellationToken = default)
     {
         Uri uri = DavPath.ToUri(BaseUri, path);
         string self = DavPath.Normalise(path);
@@ -83,19 +83,27 @@ public abstract class DavStorageProvider : IStorageProvider
             .ConfigureAwait(false);
 
         List<RemoteEntry> entries = new(resources.Count);
+        RemoteEntry? collection = null;
+
         foreach (DavResource resource in resources)
         {
             RemoteEntry entry = ToEntry(resource);
 
             // Depth 1 describes the collection along with what is in it. Which place it takes
             // among the responses is not laid down anywhere, so it is told apart by its path.
-            if (!string.Equals(entry.Path, self, StringComparison.Ordinal))
+            // It is kept rather than dropped: it is the answer to what the directory itself
+            // is, and it has already been paid for.
+            if (string.Equals(entry.Path, self, StringComparison.Ordinal))
+            {
+                collection = entry;
+            }
+            else
             {
                 entries.Add(entry);
             }
         }
 
-        return entries;
+        return new DirectoryListing(entries, collection);
     }
 
     /// <inheritdoc/>

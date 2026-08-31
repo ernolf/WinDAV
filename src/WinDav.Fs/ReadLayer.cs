@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using WinDav.Abstractions;
+using WinDav.Core.Providers;
 
 namespace WinDav.Fs;
 
@@ -50,12 +51,18 @@ internal sealed class ReadLayer
     /// How long the server has to keep taking requests before the width is raised again after
     /// a refusal, or <see langword="null"/> for the interval the gate sets itself.
     /// </param>
+    /// <param name="gate">
+    /// The gate to ask for room, or <see langword="null"/> for one of its own. A mount hands
+    /// its own in: what a server will take is a property of the server, so everything the
+    /// mount sends counts against the same number, listing ahead included.
+    /// </param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     internal ReadLayer(
         IStorageProvider provider,
         ReadSettings settings,
         ILogger log,
-        TimeSpan? recovery = null)
+        TimeSpan? recovery = null,
+        RequestGate? gate = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(settings);
@@ -65,7 +72,7 @@ internal sealed class ReadLayer
         _log = log;
         _window = Math.Max(settings.Window, 0);
 
-        Gate = new RequestGate(settings.Requests, log, recovery);
+        Gate = gate ?? new RequestGate(settings.Requests, log, recovery);
         Budget = new ReadBudget(settings.Total);
     }
 

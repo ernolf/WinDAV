@@ -84,7 +84,7 @@ internal sealed class FakeStore : IStorageProvider
         _content[path] = Encoding.UTF8.GetBytes(content);
     }
 
-    public Task<IReadOnlyList<RemoteEntry>> ListAsync(string path, CancellationToken cancellationToken)
+    public Task<DirectoryListing> ListAsync(string path, CancellationToken cancellationToken)
     {
         Fail();
 
@@ -107,7 +107,7 @@ internal sealed class FakeStore : IStorageProvider
             }
         }
 
-        return Task.FromResult<IReadOnlyList<RemoteEntry>>(children);
+        return Task.FromResult(new DirectoryListing(children, directory));
     }
 
     public Task<RemoteEntry> GetAsync(string path, CancellationToken cancellationToken)

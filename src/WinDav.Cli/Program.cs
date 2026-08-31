@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using WinDav.Abstractions;
 using WinDav.Core;
 using WinDav.Core.Logging;
+using WinDav.Core.Providers;
 using WinDav.Fs;
 
 namespace WinDav.Cli;
@@ -43,6 +44,7 @@ internal static class Program
         LogSwitches switches;
         ReadSettings reads;
         TimeSpan attributes;
+        DirectorySettings directories;
 
         // Before anything is opened, because a recording asked for in a way that cannot be
         // read is a command line to correct, and a command line to correct leaves no file.
@@ -52,6 +54,7 @@ internal static class Program
             switches = LogSwitches.Read(line);
             reads = ReadSwitches.Read(line);
             attributes = CacheSwitches.Read(line);
+            directories = DirectorySwitches.Read(line);
         }
         catch (UsageException usage)
         {
@@ -73,7 +76,7 @@ internal static class Program
 
         try
         {
-            int status = await RunAsync(line, reads, attributes, logging, cancellation.Token).ConfigureAwait(false);
+            int status = await RunAsync(line, reads, attributes, directories, logging, cancellation.Token).ConfigureAwait(false);
 
             // The command line itself is in the header of the file. What is worth a record of
             // its own is what came of it, because a command that answered nothing and one that
@@ -143,6 +146,7 @@ internal static class Program
         CommandLine line,
         ReadSettings reads,
         TimeSpan attributes,
+        DirectorySettings directories,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
@@ -167,7 +171,7 @@ internal static class Program
 
         if (string.Equals(line.Verb, "mount", StringComparison.Ordinal))
         {
-            return await MountCommand.RunAsync(line, reads, attributes, logging, cancellationToken).ConfigureAwait(false);
+            return await MountCommand.RunAsync(line, reads, attributes, directories, logging, cancellationToken).ConfigureAwait(false);
         }
 
         throw new UsageException($"There is no command named '{line.Verb}'. There is account, mount and help.");
@@ -240,6 +244,11 @@ internal static class Program
               --requests <count>   How many requests may be on the wire at once: 2, or off.
               --attributes <time>  How long what the server said about an entry is believed:
                                    10s, or off.
+              --list-ahead <levels>
+                                   How far below an open directory a mount lists ahead: 1, or off.
+              --list-ahead-requests <count>
+                                   How many requests one round of that may make: 32, or off.
+              --listings <count>   How many directory listings are held at once: 512, or off.
 
             Logging:
               A record is written to %LOCALAPPDATA%\{ProductInfo.Slug}\logs whatever happens,
@@ -280,6 +289,22 @@ internal static class Program
               server can be that many seconds out of date here. --attributes off asks again
               for every question, which is how a listing that looks stale is narrowed down.
               It can be set in the environment instead, as {Switches.Variable(CacheSwitches.LifetimeOption)}.
+
+            Listing:
+              Listing a directory costs one request, whether it holds three entries or three
+              hundred. So a mount that has listed one goes on to list the directories in it
+              while nobody is waiting, and opening one of those finds it already there.
+              --list-ahead is how many levels below an open directory that goes.
+              --list-ahead-requests is the ceiling on one round of it, counted in requests
+              rather than in entries, and what a round does not get to is dropped rather than
+              done later. --listings is how many listings are held at once; the ones longest
+              without being proven current are let go of first. Nothing is written to disk.
+              A listing is held for as long as an attribute, because it is the same request
+              that says whether it still holds, so --attributes off switches this off as well.
+              Each of the three takes off, and with all three off a directory is listed when
+              it is opened and at no other time.
+              These three can be set in the environment instead, as {Switches.Variable(DirectorySwitches.DepthOption)},
+              {Switches.Variable(DirectorySwitches.RequestsOption)} and {Switches.Variable(DirectorySwitches.DirectoriesOption)}.
 
             Accounts:
               'account add' writes the account down and keeps its password apart from it,
