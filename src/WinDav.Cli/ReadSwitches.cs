@@ -77,7 +77,7 @@ internal static class ReadSwitches
         if (window > Array.MaxLength)
         {
             throw new UsageException(
-                $"{WindowOption} is at most {Array.MaxLength.ToString(CultureInfo.InvariantCulture)} bytes, which is as much as one piece of memory holds.");
+                $"{WindowOption} is at most {Array.MaxLength.ToString(CultureInfo.InvariantCulture)} bytes, which is the largest block of memory that can be held at once.");
         }
 
         if (total > 0 && window > total)

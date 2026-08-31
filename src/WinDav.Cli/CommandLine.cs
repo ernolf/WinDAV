@@ -125,7 +125,8 @@ internal sealed class CommandLine
         {
             // Named, because the likeliest way to get here is a flag written in front of
             // something that belongs elsewhere, as in "mount --anonymous https://server".
-            throw new UsageException($"The option {name} takes no value, and '{value}' was read as one.");
+            throw new UsageException(
+                $"The option {name} takes no value, and '{value}' was given to it. A flag takes the next word as its value, so anything else goes before {name}.");
         }
 
         return true;

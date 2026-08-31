@@ -373,7 +373,7 @@ internal static class MountCommand
     {
         if (line.Arguments.Count > 1)
         {
-            throw new UsageException($"'{ProductInfo.Slug} mount {action}' takes nothing after it, and '{line.Arguments[1]}' was read as something.");
+            throw new UsageException($"'{ProductInfo.Slug} mount {action}' takes nothing after it, and '{line.Arguments[1]}' came after it.");
         }
     }
 
@@ -425,8 +425,11 @@ internal static class MountCommand
     private static void WriteRemoved(string id) =>
         Console.WriteLine($"The mount '{id}' is gone. The account it was made from is untouched.");
 
-    private static void WriteNoMounts(string filePath) =>
+    private static void WriteNoMounts(string filePath)
+    {
         Console.WriteLine($"There is no mount written down yet. {filePath} is where they go.");
+        Console.WriteLine($"Write one down with '{ProductInfo.Slug} mount {Add} <mount> --account <account>'.");
+    }
 
     private static void WriteUnmounting() => Console.WriteLine("Unmounting.");
 

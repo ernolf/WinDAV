@@ -94,7 +94,7 @@ internal sealed class MountAddRequest
         if (line.Arguments.Count > 2)
         {
             throw new UsageException(
-                $"'{ProductInfo.Slug} mount {MountCommand.Add}' writes one mount down, and '{line.Arguments[2]}' was read as a second name.");
+                $"'{ProductInfo.Slug} mount {MountCommand.Add}' writes down one mount, and '{line.Arguments[1]}' and '{line.Arguments[2]}' were both read as its name. A name with a space in it goes in quotes.");
         }
 
         if (line.Arguments.Count != 2)
@@ -143,12 +143,12 @@ internal sealed class MountAddRequest
         // a mount called ADD would be one that only its own spelling could get to.
         if (IsVerb(id, MountCommand.Add) || IsVerb(id, MountCommand.List) || IsVerb(id, MountCommand.Remove))
         {
-            throw new UsageException($"'{id}' is what a mount is done to, so it cannot be what one is called.");
+            throw new UsageException($"A mount cannot be called '{id}': '{ProductInfo.Slug} mount {id}' is a command of its own. Pick another name.");
         }
 
         if (ServerAddress.LooksLikeOne(id))
         {
-            throw new UsageException($"'{id}' is read as the address of a server, so it cannot be the name of a mount.");
+            throw new UsageException($"A mount cannot be called '{id}': that reads as the address of a server. Pick a plain name, such as work.");
         }
 
         return id;
