@@ -42,6 +42,7 @@ internal static class Program
         CommandLine line;
         LogSwitches switches;
         ReadSettings reads;
+        TimeSpan attributes;
 
         // Before anything is opened, because a recording asked for in a way that cannot be
         // read is a command line to correct, and a command line to correct leaves no file.
@@ -50,6 +51,7 @@ internal static class Program
             line = CommandLine.Parse(args);
             switches = LogSwitches.Read(line);
             reads = ReadSwitches.Read(line);
+            attributes = CacheSwitches.Read(line);
         }
         catch (UsageException usage)
         {
@@ -71,7 +73,7 @@ internal static class Program
 
         try
         {
-            int status = await RunAsync(line, reads, logging, cancellation.Token).ConfigureAwait(false);
+            int status = await RunAsync(line, reads, attributes, logging, cancellation.Token).ConfigureAwait(false);
 
             // The command line itself is in the header of the file. What is worth a record of
             // its own is what came of it, because a command that answered nothing and one that
@@ -140,6 +142,7 @@ internal static class Program
     private static async Task<int> RunAsync(
         CommandLine line,
         ReadSettings reads,
+        TimeSpan attributes,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
@@ -164,7 +167,7 @@ internal static class Program
 
         if (string.Equals(line.Verb, "mount", StringComparison.Ordinal))
         {
-            return await MountCommand.RunAsync(line, reads, logging, cancellationToken).ConfigureAwait(false);
+            return await MountCommand.RunAsync(line, reads, attributes, logging, cancellationToken).ConfigureAwait(false);
         }
 
         throw new UsageException($"There is no command named '{line.Verb}'.");
@@ -222,6 +225,8 @@ internal static class Program
               --read-ahead-total <size>
                                    How much of that all open handles may hold: 64m, or off.
               --requests <count>   How many requests may be on the wire at once: 2, or off.
+              --attributes <time>  How long what the server said about an entry is believed:
+                                   10s, or off.
 
             What was done and what failed is written to %LOCALAPPDATA%\{ProductInfo.Slug}\logs
             whether anything was asked for or not, and --log off stops that: nothing is
@@ -248,6 +253,14 @@ internal static class Program
             what was read and nothing is kept between them.
             These three are read from the environment as well, as {Switches.Variable(ReadSwitches.WindowOption)},
             {Switches.Variable(ReadSwitches.TotalOption)} and {Switches.Variable(ReadSwitches.RequestsOption)}.
+
+            Opening a file asks the server about it twice, and a listing is told about every
+            entry of a directory for what one of them costs, so --attributes is how long a
+            mount may go on believing what it was told: a listing followed by three opens is
+            one request instead of four. It is counted in seconds, because the point of the
+            server is the other people writing on it, and off asks again for every question,
+            which is what a stale directory is narrowed down with. It is read from the
+            environment as well, as {Switches.Variable(CacheSwitches.LifetimeOption)}.
 
             The password is asked for, so that it stays out of the history of the shell.
             An account is written to the configuration; its credential is kept apart from it,

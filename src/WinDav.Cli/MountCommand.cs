@@ -45,12 +45,14 @@ internal static class MountCommand
     /// </summary>
     /// <param name="line">What was typed.</param>
     /// <param name="reads">How much the mount may fetch at a time, and how much at once.</param>
+    /// <param name="attributes">How long the mount may believe what it was told about an entry.</param>
     /// <param name="logging">Where a mount going up and coming down is written down.</param>
     /// <param name="cancellationToken">Ends the mount.</param>
     /// <returns>The exit code.</returns>
     internal static async Task<int> RunAsync(
         CommandLine line,
         ReadSettings reads,
+        TimeSpan attributes,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
@@ -66,13 +68,14 @@ internal static class MountCommand
             Add => await AddAsync(line, cancellationToken).ConfigureAwait(false),
             List => await ListAsync(line, cancellationToken).ConfigureAwait(false),
             Remove => await RemoveAsync(line, cancellationToken).ConfigureAwait(false),
-            _ => await MountAsync(line, reads, logging, cancellationToken).ConfigureAwait(false),
+            _ => await MountAsync(line, reads, attributes, logging, cancellationToken).ConfigureAwait(false),
         };
     }
 
     private static async Task<int> MountAsync(
         CommandLine line,
         ReadSettings reads,
+        TimeSpan attributes,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
@@ -103,9 +106,14 @@ internal static class MountCommand
             string label = request.LabelFor(server, userId);
             string? prefix = request.PrefixFor(server, userId);
 
+            // Decision 75: what the server said about an entry is worth keeping for a moment,
+            // because opening a file asks for it twice and a listing was told about every
+            // sibling anyway. A lifetime of nothing leaves this out and asks every time.
+            IStorageProvider provider = AttributeCache.Over(connection.Provider, attributes);
+
             // One request before the drive appears, so that a wrong credential or a path that
             // is not there is a sentence here instead of an error in every window afterwards.
-            RemoteEntry root = await connection.Provider.GetAsync(RemoteRoot, cancellationToken)
+            RemoteEntry root = await provider.GetAsync(RemoteRoot, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!root.IsDirectory)
@@ -133,7 +141,7 @@ internal static class MountCommand
             // The remote path went to the provider, which is rooted at it, so everything above
             // it is out of reach. Rooting the file system as well would apply it a second time.
             using ProviderMount mount = new(
-                connection.Provider,
+                provider,
                 new MountSettings
                 {
                     MountPoint = request.MountPoint,
