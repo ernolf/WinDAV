@@ -147,7 +147,7 @@ internal static class ConfigurationValidator
         bool hasDirectory = !string.IsNullOrWhiteSpace(mount.Directory);
 
         // Neither of them is the next free letter, which is what a mount that is asked for
-        // without a place to go takes as well; decisions.md 73. Both of them is a choice
+        // without a place to go takes as well; decision 73. Both of them is a choice
         // nobody has made.
         if (hasLetter && hasDirectory)
         {

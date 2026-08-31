@@ -10,7 +10,8 @@ namespace WinDav.Cli;
 /// </summary>
 /// <remarks>
 /// In one place because more than one command lists something, and a table that is laid out
-/// twice is laid out differently as soon as one of the two is changed; decisions.md 73.
+/// twice is laid out differently as soon as one of the two is changed. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#73-a-mount-that-stays">decision 73</see>.
 /// </remarks>
 internal static class Table
 {

@@ -20,8 +20,8 @@ namespace WinDav.Core.Logging;
 /// <para>
 /// It says so in the file, twice: a line when it starts naming both limits, and a line when
 /// it stops naming the reason and how much it wrote. Between them the reader has the whole
-/// of what was recorded, and outside them the file is as quiet as it always is.
-/// See decisions.md 74.
+/// of what was recorded, and outside them the file is as quiet as it always is. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#74-logging-five-levels-four-areas-and-a-switch-that-turns-itself-off">decision 74</see>.
 /// </para>
 /// </remarks>
 public sealed class LogRecording : IDisposable

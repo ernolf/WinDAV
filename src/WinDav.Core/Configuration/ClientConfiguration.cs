@@ -46,7 +46,8 @@ public sealed class ClientConfiguration
     /// <remarks>
     /// The name is looked at first, because it is what a person types; the uuid comes after,
     /// because it is what a script holds on to, being the one of the two that outlives a
-    /// renaming. See decisions.md 71.
+    /// renaming. See
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#71-four-names-for-an-account-uuid-id-userid-loginid">decision 71</see>.
     /// </remarks>
     public AccountConfiguration? FindAccount(string asked)
     {

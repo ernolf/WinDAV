@@ -24,7 +24,8 @@ namespace WinDav.Dav;
 /// A request that failed is written whether anything was asked for or not, because a request
 /// that failed is the thing a person went looking for. What is written for one that
 /// succeeded is a line at debug, and at trace the headers of both halves as well, with
-/// anything that carries a credential taken out. See decisions.md 74.
+/// anything that carries a credential taken out. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#74-logging-five-levels-four-areas-and-a-switch-that-turns-itself-off">decision 74</see>.
 /// </para>
 /// </remarks>
 internal sealed class LoggingHandler : DelegatingHandler

@@ -10,7 +10,8 @@ namespace WinDav.Core.Logging;
 /// The level says how loud, the area says where, and both are needed: the interesting
 /// question is almost always what <see cref="Http"/> did while <see cref="Fs"/> was asking.
 /// Four of them, not one per class, because an area is what a person switches on when they
-/// are looking for something. See decisions.md 74.
+/// are looking for something. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#74-logging-five-levels-four-areas-and-a-switch-that-turns-itself-off">decision 74</see>.
 /// </remarks>
 public enum LogArea
 {

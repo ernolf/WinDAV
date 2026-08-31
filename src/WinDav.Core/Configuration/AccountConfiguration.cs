@@ -20,7 +20,8 @@ public sealed class AccountConfiguration
     /// It is never made up and never changes. Everything that has to survive a renaming points
     /// here, which is what lets <see cref="Id"/> be a name a person chose. The word is the
     /// one from the standard rather than the Windows one, because a member named Guid is a
-    /// member CA1720 turns down. See decisions.md 71.
+    /// member CA1720 turns down. See
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#71-four-names-for-an-account-uuid-id-userid-loginid">decision 71</see>.
     /// </remarks>
     public Guid Uuid { get; init; }
 
@@ -54,7 +55,7 @@ public sealed class AccountConfiguration
     /// <remarks>
     /// The canonical one, not the display name and not necessarily what was typed to log in:
     /// the file tree on the server is named after it. Where it is an email address, that is
-    /// what stands in the path. See decisions.md 71.
+    /// what stands in the path. See decision 71.
     /// </remarks>
     public string? UserId { get; init; }
 
@@ -75,7 +76,8 @@ public sealed class AccountConfiguration
     /// <remarks>
     /// A key of the program's own making and of no meaning, not the id of the account. A name
     /// that says something is a name that changes, and two accounts that arrive at the same
-    /// one would arrive at the same credential. See decisions.md 70.
+    /// one would arrive at the same credential. See
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#70-an-account-is-a-server-and-a-user-and-its-secret-sits-under-a-key-of-its-own">decision 70</see>.
     /// </remarks>
     public string? SecretRef { get; init; }
 
@@ -88,7 +90,8 @@ public sealed class AccountConfiguration
     /// so removing the account is the moment to give it back. What was typed in belongs to
     /// whoever typed it and may be in use elsewhere, so it is asked about. The name says
     /// nothing about credentials on purpose; there is one place for those, and it is not
-    /// here. See decisions.md 69.
+    /// here. See
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#69-what-a-login-issued-is-handed-back-when-it-is-removed">decision 69</see>.
     /// </remarks>
     public bool IssuedHere { get; init; }
 }

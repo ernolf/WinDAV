@@ -18,8 +18,9 @@ namespace WinDav.Cli;
 /// </summary>
 /// <remarks>
 /// The credential never reaches the configuration file. It goes into the secret store under a
-/// key of the program's own making, and the file holds that key and nothing else; decisions.md
-/// 68 says which store and why, and 70 why the key is not the name of the account.
+/// key of the program's own making, and the file holds that key and nothing else;
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#68-two-secret-stores-behind-one-seam-dpapi-first">decision 68</see> says which store and why, and 70 why the key is not
+/// the name of the account.
 /// </remarks>
 internal static class AccountCommand
 {
@@ -205,7 +206,7 @@ internal static class AccountCommand
 
                 // Last, because it is the widest and the one that is read least often. It is
                 // shown at all because it is what a mount in the file points at, and what
-                // account remove takes besides the name. See decisions.md 71.
+                // account remove takes besides the name. See decision 71.
                 account.Uuid.ToString(),
             ]);
         }
@@ -302,7 +303,7 @@ internal static class AccountCommand
         [
             .. client.Mounts
 
-                // By identity, not by name: decisions.md 71.
+                // By identity, not by name: decision 71.
                 .Where(mount => string.Equals(mount.Account, account.Uuid.ToString(), StringComparison.OrdinalIgnoreCase))
                 .Select(mount => mount.Id),
         ];

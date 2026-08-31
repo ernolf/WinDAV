@@ -9,7 +9,8 @@ namespace WinDav.Core.Logging;
 /// <remarks>
 /// There is no fourth way. A recording is never switched off by hand and never starts again
 /// on its own, so whichever of these three is written in the closing line is the whole answer
-/// to what happened to it. See decisions.md 74.
+/// to what happened to it. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#74-logging-five-levels-four-areas-and-a-switch-that-turns-itself-off">decision 74</see>.
 /// </remarks>
 public enum LogRecordingEnd
 {

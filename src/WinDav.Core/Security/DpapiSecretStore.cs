@@ -20,8 +20,9 @@ namespace WinDav.Core.Security;
 /// </para>
 /// <para>
 /// It goes below <see cref="ProductInfo.LocalDataDirectory"/> and not next to the
-/// configuration, which roams. See decisions.md 68 for the whole of it, and for the second
-/// store that exists for the roaming case.
+/// configuration, which roams. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#68-two-secret-stores-behind-one-seam-dpapi-first">decision 68</see> for the whole of it, and for the second store that
+/// exists for the roaming case.
 /// </para>
 /// </remarks>
 [SupportedOSPlatform("windows")]

@@ -49,9 +49,9 @@ internal sealed class AccountAddRequest
     /// be asked for it.
     /// </summary>
     /// <remarks>
-    /// The name the credential is presented under, which decisions.md 71 keeps apart from the
-    /// name the store knows the user by. What is typed here is a login, because it is what a
-    /// password was issued for.
+    /// The name the credential is presented under, which
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#71-four-names-for-an-account-uuid-id-userid-loginid">decision 71</see> keeps apart from the name the store knows the
+    /// user by. What is typed here is a login, because it is what a password was issued for.
     /// </remarks>
     internal required string? LoginId { get; init; }
 
@@ -124,7 +124,7 @@ internal sealed class AccountAddRequest
     /// <remarks>
     /// The same name a mount of the whole account carries, and for the same reason: it is
     /// what a person calls the thing when asked which account they mean. Built from the login
-    /// rather than from the user, because decisions.md 71 has two logins reaching one user,
+    /// rather than from the user, because decision 71 has two logins reaching one user,
     /// and a name that told them apart nowhere would be no name at all.
     /// </remarks>
     internal static string DeriveId(Uri server, string? loginId)

@@ -29,7 +29,8 @@ namespace WinDav.Core.Logging;
 /// Nothing here throws at the caller. A log that cannot be written is a nuisance; a log that
 /// takes the program down with it is a defect. The first failure closes the file and every
 /// later record is dropped in silence, while the console goes on saying what it was going to
-/// say. See decisions.md 74.
+/// say. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#74-logging-five-levels-four-areas-and-a-switch-that-turns-itself-off">decision 74</see>.
 /// </para>
 /// </remarks>
 public sealed class LogFile : IDisposable
@@ -114,8 +115,8 @@ public sealed class LogFile : IDisposable
     /// A log file over <see cref="DirectoryName"/> below <see cref="ProductInfo.LocalDataDirectory"/>.
     /// </returns>
     /// <remarks>
-    /// Local and not roaming, because a log describes one machine and it grows. See
-    /// decisions.md 74.
+    /// Local and not roaming, because a log describes one machine and it grows.
+    /// See decision 74.
     /// </remarks>
     public static LogFile Default(string command) =>
         new(Path.Combine(ProductInfo.LocalDataDirectory, DirectoryName), command);
