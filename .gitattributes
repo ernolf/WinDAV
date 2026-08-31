@@ -7,6 +7,12 @@
 *.psm1 text eol=crlf
 *.psd1 text eol=crlf
 
+# Not a matter of correctness but of the tool that writes the file: dotnet restore writes
+# the lock files with CRLF on Windows, and a restore would otherwise leave them looking
+# modified until the index is renormalised. What is stored stays LF. See decision 11:
+# https://github.com/ernolf/WinDAV/wiki/Decisions#11-lf-in-the-working-tree-on-every-platform
+packages.lock.json text eol=crlf
+
 *.png binary
 *.ico binary
 *.zip binary
