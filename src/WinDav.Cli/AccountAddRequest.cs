@@ -95,7 +95,7 @@ internal sealed class AccountAddRequest
             // The login in the browser is Nextcloud's, not WebDAV's. Sending its first
             // request to a server that knows nothing of it is asking a stranger for a token.
             throw new UsageException(
-                "A WebDAV store is reached with --user, or with --anonymous. The login in the browser is Nextcloud's.");
+                $"A --provider {provider} account needs --user <name>, or --anonymous if the store takes no credential. Logging in through the browser works only with --provider {NextcloudProviderFactory.ProviderName}.");
         }
 
         if (anonymous && nextcloud)
@@ -103,7 +103,7 @@ internal sealed class AccountAddRequest
             // Not a rule of this program's making: a Nextcloud file path has the user in it,
             // so there is nothing an anonymous Nextcloud account could be pointed at.
             throw new UsageException(
-                "A Nextcloud account is reached as a user. --anonymous fits a plain WebDAV store, with --provider webdav.");
+                "A Nextcloud account is always a user, so --anonymous does not fit it. Leave --anonymous out, or add --provider webdav for a store that takes no credential.");
         }
 
         return new AccountAddRequest

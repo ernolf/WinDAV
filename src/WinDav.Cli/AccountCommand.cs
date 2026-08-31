@@ -120,7 +120,7 @@ internal static class AccountCommand
 
                 throw new UsageException(anotherDoor
                     ? $"Nothing was added. The account '{known.Id}' reaches {userId} at {server.Host} already."
-                    : $"The account '{known.Id}' already reaches {userId} at {server.Host}. Another way into it is a mount, not another account.");
+                    : $"The account '{known.Id}' already reaches {userId} at {server.Host}. To reach the same files a second time, add another mount, not another account.");
             }
         }
 
@@ -311,7 +311,7 @@ internal static class AccountCommand
         if (mounts.Length > 0)
         {
             throw new UsageException(
-                $"The account '{account.Id}' is what the mount {string.Join(", ", mounts)} is made from. Take that away first.");
+                $"The account '{account.Id}' is what the mount {string.Join(", ", mounts)} is made from. Remove the mount first, with '{ProductInfo.Slug} mount {MountCommand.Remove} <mount>'.");
         }
     }
 
@@ -319,7 +319,7 @@ internal static class AccountCommand
     {
         if (line.Arguments.Count > 1)
         {
-            throw new UsageException($"'{ProductInfo.Slug} account {action}' takes nothing after it, and '{line.Arguments[1]}' was read as something.");
+            throw new UsageException($"'{ProductInfo.Slug} account {action}' takes nothing after it, and '{line.Arguments[1]}' came after it.");
         }
     }
 
@@ -527,7 +527,7 @@ internal static class AccountCommand
         Console.WriteLine(address.AbsoluteUri);
         Console.WriteLine(
             "The default browser is opened. Use the address above for another one, for a private window, or for another machine.");
-        Console.WriteLine("Waiting.");
+        Console.WriteLine("Waiting for the login to be granted.");
     }
 
     private static void WriteAdded(string id, string filePath) =>
@@ -551,6 +551,9 @@ internal static class AccountCommand
     private static void WriteRemoved(string id) =>
         Console.WriteLine($"The account '{id}' is gone, and so is its credential.");
 
-    private static void WriteNoAccounts(string filePath) =>
+    private static void WriteNoAccounts(string filePath)
+    {
         Console.WriteLine($"There is no account yet. {filePath} is where they go.");
+        Console.WriteLine($"Add one with '{ProductInfo.Slug} account {Add} <url>'.");
+    }
 }

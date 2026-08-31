@@ -262,7 +262,7 @@ internal sealed class MountRequest
             if (line.Given(named))
             {
                 throw new UsageException(
-                    $"The mount '{stored}' says that for itself, so {named} belongs to a mount that is not stored.");
+                    $"The mount '{stored}' holds its own settings, so it takes no options. To change {named}, remove the mount and write it down again.");
             }
         }
 
@@ -288,7 +288,7 @@ internal sealed class MountRequest
         if (line.Arguments.Count > 0)
         {
             throw new UsageException(
-                $"A mount is made from an account or from an address, not from both, and '{line.Arguments[0]}' was read as an address.");
+                $"'{line.Arguments[0]}' is the address of a server, and --account names an account. A mount is made from one or the other, not from both.");
         }
 
         foreach (string named in s_ofTheStore)
@@ -296,7 +296,7 @@ internal sealed class MountRequest
             if (line.Given(named))
             {
                 throw new UsageException(
-                    $"The account settles that, so {named} belongs to a mount that names no account.");
+                    $"The account already holds the server, the user and the credential, so {named} would say it a second time. It belongs to a mount made from an address.");
             }
         }
     }

@@ -53,7 +53,7 @@ internal static class MountOptions
 
         if (written.Length == 0)
         {
-            throw new UsageException("A drive is called something. Leaving --label out names it after what it reaches.");
+            throw new UsageException("--label needs a name for the drive. Leave --label out to name it after what it reaches.");
         }
 
         return written;

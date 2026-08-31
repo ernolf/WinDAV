@@ -170,7 +170,7 @@ internal static class Program
             return await MountCommand.RunAsync(line, reads, attributes, logging, cancellationToken).ConfigureAwait(false);
         }
 
-        throw new UsageException($"There is no command named '{line.Verb}'.");
+        throw new UsageException($"There is no command named '{line.Verb}'. There is account, mount and help.");
     }
 
     private static void WriteHelp()
@@ -178,6 +178,9 @@ internal static class Program
         Console.WriteLine(
             $"""
             {ProductInfo.Name} {ProductInfo.Version}
+
+            Mount a WebDAV or Nextcloud store as a Windows drive. The drive is read only in
+            this version, and it lasts as long as the command runs: Ctrl+C takes it away.
 
             Usage:
               {ProductInfo.Slug} account add <url> [options]
@@ -193,6 +196,16 @@ internal static class Program
               {ProductInfo.Slug} --version
 
             <account> is the id or the uuid of an account, <mount> the name of a mount.
+
+            To get started:
+              {ProductInfo.Slug} account add https://cloud.example.com
+              {ProductInfo.Slug} mount add work --account alice@cloud.example.com --mount W:
+              {ProductInfo.Slug} mount work
+
+            The first opens a browser to log in and writes the account down, under the name
+            that '{ProductInfo.Slug} account list' then shows. The second writes down a mount called
+            work on drive W:, and asks nothing of a server. The third brings the drive up and
+            holds it there until you press Ctrl+C.
 
             Options of account add:
               --provider <name>    The kind of store: nextcloud (the default) or webdav.
@@ -228,59 +241,68 @@ internal static class Program
               --attributes <time>  How long what the server said about an entry is believed:
                                    10s, or off.
 
-            What was done and what failed is written to %LOCALAPPDATA%\{ProductInfo.Slug}\logs
-            whether anything was asked for or not, and --log off stops that: nothing is
-            written and no file is made. The areas of --debug and --trace are fs, http,
-            provider and cli, separated by commas, and all of them when none is named.
-            They belong after the command, as in "mount name --trace fs,http", because an
-            option takes the word after it as its value. A recording ends by itself, when the
-            time is up or when it has written 16 MB, and the file says which of the two it
-            was; nothing starts it again. What --log asks for has no such end: it lasts as
-            long as the command does.
-            All four are read from the environment as well, as {Switches.Variable(LogSwitches.LevelOption)}, {Switches.Variable(LogSwitches.DebugOption)},
-            {Switches.Variable(LogSwitches.TraceOption)} and {Switches.Variable(LogSwitches.ForOption)}; an option wins over its variable.
+            Logging:
+              A record is written to %LOCALAPPDATA%\{ProductInfo.Slug}\logs whatever happens,
+              and --log says how much of it. --log off writes nothing and makes no file at
+              all. What --log asks for lasts as long as the command does.
+              --debug and --trace write a great deal more, and only for a while. --for says
+              how long; a recording also ends when it has written 16 MB, and the file says
+              which of the two ended it. Nothing starts it again.
+              Both take areas: fs, http, provider and cli, separated by commas, and all of
+              them when none is named. Write options after the command, because an option
+              takes the word after it as its value:
+                {ProductInfo.Slug} mount work --trace fs,http --for 2m
+              All four can be set in the environment instead, as {Switches.Variable(LogSwitches.LevelOption)}, {Switches.Variable(LogSwitches.DebugOption)},
+              {Switches.Variable(LogSwitches.TraceOption)} and {Switches.Variable(LogSwitches.ForOption)}. An option wins over its variable.
 
-            A request costs the same quarter second whether it asks for a kilobyte or eight
-            megabytes, so --read-ahead is how much a mount may fetch at a time: where a read
-            continues where the last one ended, it may fetch that much and keep it for the
-            handle that asked. A read that lands anywhere else, and a read larger than that,
-            is a request of its own. --read-ahead-total is the ceiling over all open handles
-            together, and a handle that finds it used up reads without a window rather than
-            waiting for one. --requests is how many may be on the wire at the same time; a
-            mount lowers it itself when the server answers that it is busy, and raises it
-            again slowly. Sizes are bytes, or a number with k, m or g after it. Each of the
-            three takes off, and with all three off every read is one request for exactly
-            what was read and nothing is kept between them.
-            These three are read from the environment as well, as {Switches.Variable(ReadSwitches.WindowOption)},
-            {Switches.Variable(ReadSwitches.TotalOption)} and {Switches.Variable(ReadSwitches.RequestsOption)}.
+            Reading:
+              A request costs the server about the same quarter second whether it asks for a
+              kilobyte or for eight megabytes. --read-ahead is how much a mount fetches at a
+              time where a read carries on from where the last one ended, and it keeps that
+              much for the handle that asked. A read that lands anywhere else, or one larger
+              than that, is a request of its own.
+              --read-ahead-total is the ceiling over all open handles together. A handle that
+              finds it used up reads without a window rather than waiting for one.
+              --requests is how many requests may be on the wire at the same time. A mount
+              lowers it itself while the server answers that it is busy, and raises it again
+              slowly.
+              Sizes are bytes, or a number with k, m or g after it. Each of the three takes
+              off, and with all three off every read is one request for exactly what was read,
+              with nothing kept between them.
+              These three can be set in the environment instead, as {Switches.Variable(ReadSwitches.WindowOption)},
+              {Switches.Variable(ReadSwitches.TotalOption)} and {Switches.Variable(ReadSwitches.RequestsOption)}.
 
-            Opening a file asks the server about it twice, and a listing is told about every
-            entry of a directory for what one of them costs, so --attributes is how long a
-            mount may go on believing what it was told: a listing followed by three opens is
-            one request instead of four. It is counted in seconds, because the point of the
-            server is the other people writing on it, and off asks again for every question,
-            which is what a stale directory is narrowed down with. It is read from the
-            environment as well, as {Switches.Variable(CacheSwitches.LifetimeOption)}.
+            Attributes:
+              Opening a file asks the server about it twice, and a listing is told about every
+              entry of a directory for what one of them costs. --attributes is how long, in
+              seconds, a mount may go on believing what it was told: a listing and three opens
+              after it cost one request instead of four. What somebody else changes on the
+              server can be that many seconds out of date here. --attributes off asks again
+              for every question, which is how a listing that looks stale is narrowed down.
+              It can be set in the environment instead, as {Switches.Variable(CacheSwitches.LifetimeOption)}.
 
-            The password is asked for, so that it stays out of the history of the shell.
-            An account is written to the configuration; its credential is kept apart from it,
-            encrypted for this user on this machine. Removing an account withdraws the password
-            its login was given, unless another account here is signed in with the same one; a
-            password that was typed in is withdrawn only if you say so.
-            A server that lets one user in under more than one name is reached under the name
-            the password was made for. Adding a second name for a user who is here already is
-            asked about, and what comes of it is a second account for the same files.
-            An account is named by its id or by its uuid, and account list shows both. The uuid
-            is what a mount in the configuration points at, so a rename leaves the mount alone.
-            A mount made from an account asks for nothing, because the server, the user and the
-            credential are what the account holds; --provider, --user and --anonymous belong to
-            a mount that names no account.
-            A mount that is worth having again is written down with mount add, which asks
-            nothing of a server, and is run afterwards by its name alone: what it was given is
-            what it keeps, so a stored mount takes no options. mount list shows what is there,
-            and mount remove takes one away without touching the account it was made from.
-            A mount lasts as long as the command runs, and Ctrl+C takes it away.
-            Everything on it is read only in this version.
+            Accounts:
+              'account add' writes the account down and keeps its password apart from it,
+              encrypted for this user on this machine. The password is asked for at a prompt,
+              so that it stays out of the history of the shell.
+              'account remove' withdraws the app password the login was given, unless another
+              account here is signed in with the same one. A password that was typed in by
+              hand is withdrawn only if you say so.
+              An account is named by its id or by its uuid, and 'account list' shows both. A
+              mount is written down against the uuid, so changing an id leaves it alone.
+              A server may let one user in under more than one name. An account is reached
+              under the name its app password was made for, which is not always the one that
+              was typed. Adding a second name for a user that is here already is asked about
+              first, and saying yes to it makes a second account for the same files.
+
+            Mounts:
+              'mount add' writes a mount down and asks nothing of a server. Run it afterwards
+              by its name alone: what it was given is what it keeps, so a stored mount takes
+              no options. 'mount list' shows what is there, and 'mount remove' takes one away
+              without touching the account it was made from.
+              A mount made from an account needs no --provider, --user or --anonymous: the
+              account holds the server, the user and the credential. Those three belong to a
+              mount made from an address, which is not written down.
 
             Exit codes: {Success} done, {Failed} failed, {Misused} the command line was wrong.
             """);
