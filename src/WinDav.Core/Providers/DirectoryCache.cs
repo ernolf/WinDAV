@@ -51,12 +51,24 @@ namespace WinDav.Core.Providers;
 /// and
 /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#78-a-listing-that-has-run-out-is-fetched-again-when-a-name-in-it-is-asked-for">decision 78</see>.
 /// </para>
+/// <para>
+/// Two callers that want the same listing at the same moment share the one request rather
+/// than sending it twice, the reader who has caught up with what is being read ahead for him
+/// among them, which is
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#79-a-request-that-is-already-in-flight-is-waited-for-instead-of-sent-again">decision 79</see>.
+/// </para>
 /// </remarks>
 public sealed class DirectoryCache : IStorageProvider
 {
     // Ordinal, for the reason the attribute cache is ordinal: a store that keeps case has two
     // directories where these differ.
     private readonly ConcurrentDictionary<string, Held> _listings = new(StringComparer.Ordinal);
+
+    // What is on its way. A caller that finds a fetch for its path already running waits
+    // on that one instead of sending the same request again; the two are apart because a
+    // listing and the volume's figures are different questions about the same path.
+    private readonly InFlight<DirectoryListing> _fetching = new();
+    private readonly InFlight<StorageSpace> _measuring = new();
 
     private readonly ConcurrentQueue<Wanted> _queue = new();
 
@@ -300,7 +312,7 @@ public sealed class DirectoryCache : IStorageProvider
 
     /// <inheritdoc/>
     public Task<StorageSpace> GetSpaceAsync(string path, CancellationToken cancellationToken = default) =>
-        _inner.GetSpaceAsync(path, cancellationToken);
+        _measuring.JoinAsync(path, () => _inner.GetSpaceAsync(path, _stopping), cancellationToken);
 
     private static string? ParentOf(string path)
     {
@@ -362,9 +374,29 @@ public sealed class DirectoryCache : IStorageProvider
 
     private bool Fresh(Held held) => Stopwatch.GetElapsedTime(held.Stamp) < _lifetime;
 
+    // Every fetch goes through here, the one somebody is waiting for and the one read ahead
+    // alike: the two meet on a directory the reader has reached first, and one of them is a
+    // request that need not be sent.
     private async Task<DirectoryListing> FetchAsync(string path, int depth, CancellationToken cancellationToken)
     {
-        DirectoryListing listing = await _inner.ListAsync(path, cancellationToken).ConfigureAwait(false);
+        DirectoryListing listing = await _fetching
+            .JoinAsync(path, () => ReadAsync(path), cancellationToken)
+            .ConfigureAwait(false);
+
+        // Outside the join, with the depth of whoever asked: what a caller wants read ahead
+        // is not what the caller it joined wants, and the one that joined a shallower fetch
+        // would otherwise get nothing read ahead at all.
+        Queue(listing.Entries, depth);
+
+        return listing;
+    }
+
+    // The fetch is the layer's rather than any one caller's, so no caller's token reaches it:
+    // one that gives up stops waiting and leaves it running for whoever else has joined. What
+    // ends it is the mount.
+    private async Task<DirectoryListing> ReadAsync(string path)
+    {
+        DirectoryListing listing = await _inner.ListAsync(path, _stopping).ConfigureAwait(false);
 
         lock (_sync)
         {
@@ -376,8 +408,6 @@ public sealed class DirectoryCache : IStorageProvider
 
             Trim();
         }
-
-        Queue(listing.Entries, depth);
 
         return listing;
     }
