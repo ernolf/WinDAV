@@ -133,7 +133,7 @@ public sealed class DirectoryCacheTests
     }
 
     [Fact]
-    public async Task ANameIsAskedAboutWhenTheListingAroundItHasRunOut()
+    public async Task AListingThatHasRunOutIsFetchedAgainForTheNameAskedFor()
     {
         TreeStore store = new();
 
@@ -145,13 +145,36 @@ public sealed class DirectoryCacheTests
 
         await Task.Delay(s_brief + s_brief, TestContext.Current.CancellationToken);
 
-        // A listing that has run out proves nothing, and the directory around it is not
-        // fetched to make it prove something: that would cost more than the question does.
-        await Assert.ThrowsAsync<ProviderException>(
+        // These names arrive in bursts far shorter than a listing lives, so the one listing
+        // answers a whole burst that would otherwise be one request per name.
+        ProviderException failure = await Assert.ThrowsAsync<ProviderException>(
             () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
 
-        Assert.Equal<string>(["/music/.git"], store.Asked);
-        Assert.Equal<string>(["/music"], store.Listed);
+        Assert.Equal(ProviderError.NotFound, failure.Error);
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music", "/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ANameTheListingHasAfterItWasFetchedAgainIsAskedAbout()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/one.mp3");
+
+        DirectoryCache cache = Cache(store, Off, s_brief);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await Task.Delay(s_brief + s_brief, TestContext.Current.CancellationToken);
+
+        await cache.GetAsync("/music/one.mp3", TestContext.Current.CancellationToken);
+
+        // The listing that had run out is fetched again, it has the name, and what the name
+        // is remains the server's to say.
+        Assert.Equal<string>(["/music/one.mp3"], store.Asked);
+        Assert.Equal<string>(["/music", "/music"], store.Listed);
     }
 
     [Fact]
