@@ -129,8 +129,18 @@ internal static class MountCommand
 
             // One request before the drive appears, so that a wrong credential or a path that
             // is not there is a sentence here instead of an error in every window afterwards.
-            RemoteEntry root = await provider.GetAsync(RemoteRoot, cancellationToken)
+            // Listed rather than only asked about, which is the same one request: Windows goes
+            // over a drive the moment it appears, for an icon and a label and whatever else
+            // watches folders, and every one of those questions is about a name that is not
+            // there. A root that was only asked about answers none of them; a root that was
+            // listed answers all of them without a further request.
+            DirectoryListing listing = await provider.ListAsync(RemoteRoot, cancellationToken)
                 .ConfigureAwait(false);
+
+            // A store that leaves the directory itself out of its own listing is asked the
+            // plain question instead.
+            RemoteEntry root = listing.Self
+                ?? await provider.GetAsync(RemoteRoot, cancellationToken).ConfigureAwait(false);
 
             if (!root.IsDirectory)
             {

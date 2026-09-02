@@ -30,11 +30,22 @@ namespace WinDav.Core.Providers;
 /// contents rather than without them, so the round costs nothing that was not already spent.
 /// </para>
 /// <para>
+/// A listing that is held is also read for what is not in it. A name absent from a listing
+/// that still holds is absent on the server, and saying so costs nothing where saying
+/// anything else costs a request. That is not a small part of the traffic: over an evening
+/// at a live mount, 2304 of 5458 requests were lookups of names that do not exist, asked by
+/// programs that watch every folder a window shows. The listing that answers need not be the
+/// one directly around the name: a whole path arrives at once, and the nearest listing above
+/// it that still holds settles it, because a directory that is not there has nothing under it.
+/// </para>
+/// <para>
 /// A version missing on either side vouches for nothing and is believed as nothing: what is
 /// held then ages out by itself, which is the behaviour of a store that has no versions for
 /// directories at all, and it is never wrong. Nothing here is written to disk, and holding
 /// nothing is one of the settings. See
-/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#76-listings-are-kept-an-etag-says-whether-they-still-hold-and-f5-throws-them-away">decision 76</see>.
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#76-listings-are-kept-an-etag-says-whether-they-still-hold-and-f5-throws-them-away">decision 76</see>
+/// and
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#77-a-listing-that-is-held-answers-what-is-not-in-it">decision 77</see>.
 /// </para>
 /// </remarks>
 public sealed class DirectoryCache : IStorageProvider
@@ -148,6 +159,8 @@ public sealed class DirectoryCache : IStorageProvider
     /// <inheritdoc/>
     public async Task<RemoteEntry> GetAsync(string path, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(path);
+
         // A directory this has listed before is asked about with its contents rather than
         // without them. That is the round: one request answers what the directory is, and the
         // version it carries for every child directory says which of the listings held below
@@ -160,6 +173,15 @@ public sealed class DirectoryCache : IStorageProvider
             {
                 return self;
             }
+        }
+
+        // What says a directory holds these entries says as plainly that it holds no others.
+        // Only a listing that still holds answers this: a stale one is not fetched for the
+        // question, because a listing of the directory above costs more than the question
+        // costs on its own, and nobody is waiting on a name that is not there.
+        if (Missing(path))
+        {
+            throw new ProviderException(ProviderError.NotFound, $"There is nothing at '{path}'.");
         }
 
         return await _inner.GetAsync(path, cancellationToken).ConfigureAwait(false);
@@ -282,6 +304,44 @@ public sealed class DirectoryCache : IStorageProvider
 
         // The root has nothing above it, and neither has a path that is not one of ours.
         return slash < 0 || path.Length <= 1 ? null : slash == 0 ? "/" : path[..slash];
+    }
+
+    // Ordinal, because the store keeps case: a listing that holds one spelling is not a
+    // listing that holds another.
+    private static bool Holds(Held held, string path)
+    {
+        foreach (RemoteEntry entry in held.Entries)
+        {
+            if (string.Equals(entry.Path, path, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // The file system is handed a whole path at once rather than a component at a time, so
+    // the directory a name is in is often one nothing has ever listed while a directory
+    // above it is held. The nearest listing that still holds decides: it says whether the
+    // one step below it is there at all, and a step that is not there takes everything under
+    // it with it. Where that step is there, nothing above says anything about the names
+    // further down, and the question goes to the server as before.
+    private bool Missing(string path)
+    {
+        string child = path;
+
+        for (string? above = ParentOf(path); above is not null; above = ParentOf(above))
+        {
+            if (_listings.TryGetValue(above, out Held held) && Fresh(held))
+            {
+                return !Holds(held, child);
+            }
+
+            child = above;
+        }
+
+        return false;
     }
 
     private bool Fresh(Held held) => Stopwatch.GetElapsedTime(held.Stamp) < _lifetime;
