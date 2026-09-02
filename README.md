@@ -1,7 +1,11 @@
+<!--
+  SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+  SPDX-License-Identifier: GPL-3.0-or-later
+-->
+
 # WinDAV
 
-> **In development, and not released.** The repository is public from the first commit
-> so that the tooling can run in the open, not because any of it is ready to use.
+> **In development, and not released.** The repository is public from the first commit so that the tooling can run in the open, not because any of it is ready to use.
 
 A WebDAV client for Windows that mounts a remote share as a real drive letter.
 

@@ -1,26 +1,22 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
 version = 1
 SPDX-PackageName = "WinDAV"
 SPDX-PackageDownloadLocation = "https://github.com/ernolf/WinDAV"
 
-# Source files carry their own SPDX header. Listed here are the files whose format
-# has no place for one, or where a header would be pure clutter.
+# Every file whose syntax has room for a comment carries its own SPDX header. Listed
+# here are the ones whose syntax has none.
 
 [[annotations]]
-path = [
-  ".editorconfig",
-  ".gitattributes",
-  ".gitignore",
-  "LICENSE",
-  "global.json",
-  "nuget.config",
-  "Directory.Build.props",
-  "Directory.Packages.props",
-  "REUSE.toml",
-  "WinDAV.slnx",
-  "**/*.csproj",
-  "**/packages.lock.json",
-  "**/*.md",
-]
+path = ["LICENSE", "global.json", "**/packages.lock.json"]
 precedence = "aggregate"
-SPDX-FileCopyrightText = "2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>"
+SPDX-FileCopyrightText = "2026 [ernolf] Raphael Gradenwitz"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# GitHub shows the funding buttons only for a file that holds nothing but what it reads.
+
+[[annotations]]
+path = [".github/FUNDING.yml"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 [ernolf] Raphael Gradenwitz"
 SPDX-License-Identifier = "GPL-3.0-or-later"

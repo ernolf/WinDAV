@@ -1,3 +1,7 @@
+<!--
+  - SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+  - SPDX-License-Identifier: GPL-3.0-or-later
+-->
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!-- The WinFsp host. First project that is allowed to be Windows-only. -->
