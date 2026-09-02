@@ -1,3 +1,7 @@
+<!--
+  - SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+  - SPDX-License-Identifier: GPL-3.0-or-later
+-->
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/WinDav.Abstractions/WinDav.Abstractions.csproj" />
