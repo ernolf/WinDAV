@@ -79,18 +79,22 @@ public sealed class DirectoryCacheTests
     }
 
     [Fact]
-    public async Task ADirectoryThatWasNeverListedIsAskedAboutOnItsOwn()
+    public async Task ADirectoryThatWasNeverListedIsAnsweredByListingTheOneAroundIt()
     {
         TreeStore store = new();
 
-        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/", "v1");
+        store.AddDirectory("/music", "v2");
 
         DirectoryCache cache = Cache(store, Off);
 
-        await cache.GetAsync("/music", TestContext.Current.CancellationToken);
+        RemoteEntry self = await cache.GetAsync("/music", TestContext.Current.CancellationToken);
 
-        Assert.Equal<string>(["/music"], store.Asked);
-        Assert.Empty(store.Listed);
+        // The same one request either way, and this one settles every other name in the
+        // root along with it.
+        Assert.Equal("/music", self.Path);
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/"], store.Listed);
     }
 
     [Fact]
@@ -156,7 +160,7 @@ public sealed class DirectoryCacheTests
     }
 
     [Fact]
-    public async Task ANameTheListingHasAfterItWasFetchedAgainIsAskedAbout()
+    public async Task ANameTheListingHasAfterItWasFetchedAgainComesOutOfIt()
     {
         TreeStore store = new();
 
@@ -169,16 +173,17 @@ public sealed class DirectoryCacheTests
 
         await Task.Delay(s_brief + s_brief, TestContext.Current.CancellationToken);
 
-        await cache.GetAsync("/music/one.mp3", TestContext.Current.CancellationToken);
+        RemoteEntry entry = await cache.GetAsync("/music/one.mp3", TestContext.Current.CancellationToken);
 
-        // The listing that had run out is fetched again, it has the name, and what the name
-        // is remains the server's to say.
-        Assert.Equal<string>(["/music/one.mp3"], store.Asked);
+        // The listing that had run out is fetched again, it has the name, and the name is
+        // read out of it. What says a directory holds these entries says what they are.
+        Assert.Equal("/music/one.mp3", entry.Path);
+        Assert.Empty(store.Asked);
         Assert.Equal<string>(["/music", "/music"], store.Listed);
     }
 
     [Fact]
-    public async Task ANameInADirectoryThatWasNeverListedIsAskedAbout()
+    public async Task ANameInADirectoryThatWasNeverListedIsAnsweredByListingIt()
     {
         TreeStore store = new();
 
@@ -186,10 +191,73 @@ public sealed class DirectoryCacheTests
 
         DirectoryCache cache = Cache(store, Off);
 
+        ProviderException failure = await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
+
+        Assert.Equal(ProviderError.NotFound, failure.Error);
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task TheNamesAfterTheFirstInThatDirectoryCostNothing()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/one.mp3");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        RemoteEntry entry = await cache.GetAsync("/music/one.mp3", TestContext.Current.CancellationToken);
+
         await Assert.ThrowsAsync<ProviderException>(
             () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
 
-        Assert.Equal<string>(["/music/.git"], store.Asked);
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/HEAD", TestContext.Current.CancellationToken));
+
+        // What a burst of questions about single names costs: the first is a listing, and
+        // every one after it is read out of that listing.
+        Assert.Equal("/music/one.mp3", entry.Path);
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task TheListingThatSettlesANameReadsNothingAhead()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddFile("/music/one.mp3");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings());
+
+        await cache.GetAsync("/music/one.mp3", TestContext.Current.CancellationToken);
+
+        await Task.Delay(s_brief, TestContext.Current.CancellationToken);
+
+        // Nobody opened that directory; somebody asked about one name in it. What is read
+        // ahead belongs to a directory a person is looking at.
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task TheRootHasNoDirectoryAroundItAndIsAskedAbout()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/", "v1");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        RemoteEntry root = await cache.GetAsync("/", TestContext.Current.CancellationToken);
+
+        // The one name the rule cannot cover, and the one the mount asks about once.
+        Assert.Equal("/", root.Path);
+        Assert.Equal<string>(["/"], store.Asked);
         Assert.Empty(store.Listed);
     }
 
@@ -215,7 +283,7 @@ public sealed class DirectoryCacheTests
     }
 
     [Fact]
-    public async Task ANameUnderADirectoryTheListingHasIsAskedAbout()
+    public async Task ANameUnderADirectoryTheListingHasIsSettledByListingTheOneAroundIt()
     {
         TreeStore store = new();
 
@@ -226,12 +294,45 @@ public sealed class DirectoryCacheTests
 
         await cache.ListAsync("/", TestContext.Current.CancellationToken);
 
-        // '/music' is there, so what is in it is the server's to say and nothing above has
-        // been told about it.
+        // '/music' is there, so nothing above says anything about what is under it. What
+        // settles the name is a listing of the directory around it, never a question about
+        // the name.
         await Assert.ThrowsAsync<ProviderException>(
             () => cache.GetAsync("/music/live/one.mp3", TestContext.Current.CancellationToken));
 
-        Assert.Equal<string>(["/music/live/one.mp3"], store.Asked);
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/", "/music/live"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ANameUnderAListingOnItsWayWaitsForItInsteadOfAsking()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        store.Hold("/music");
+
+        Task<DirectoryListing> listing = cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await WaitFor(store, 1);
+
+        Task<RemoteEntry> question = cache.GetAsync("/music/live/.git", TestContext.Current.CancellationToken);
+
+        store.Release();
+
+        await listing.ConfigureAwait(true);
+
+        ProviderException failure = await Assert.ThrowsAsync<ProviderException>(() => question);
+
+        // A listing is written down after it has come back and been parsed, and these
+        // questions arrive in that window. What is on its way counts as held: without that,
+        // the directory below is a request of its own for something that is not there.
+        Assert.Equal(ProviderError.NotFound, failure.Error);
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music"], store.Listed);
     }
 
     [Fact]
