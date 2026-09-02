@@ -33,6 +33,12 @@ namespace WinDav.Core.Providers;
 /// is not there: a name Windows asks about several times per window and never finds is the
 /// one answer that must not be remembered wrongly.
 /// </para>
+/// <para>
+/// The two questions an open asks are milliseconds apart, and what is kept here catches the
+/// second one only once the first is answered. Where it is not answered yet, the second waits
+/// on the request already in flight instead of sending another, which is
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#79-a-request-that-is-already-in-flight-is-waited-for-instead-of-sent-again">decision 79</see>.
+/// </para>
 /// </remarks>
 public sealed class AttributeCache : IStorageProvider
 {
@@ -50,6 +56,11 @@ public sealed class AttributeCache : IStorageProvider
     // Ordinal: a store that keeps case has two entries where these differ, and answering the
     // one from the other would hand back a different file than was asked for.
     private readonly ConcurrentDictionary<string, Held> _entries = new(StringComparer.Ordinal);
+
+    // What is on its way, kept apart for the same reason the layer above keeps it apart: an
+    // entry and the volume's figures are different questions about the same path.
+    private readonly InFlight<RemoteEntry> _asking = new();
+    private readonly InFlight<StorageSpace> _measuring = new();
 
     private readonly IStorageProvider _inner;
     private readonly TimeSpan _lifetime;
@@ -137,11 +148,10 @@ public sealed class AttributeCache : IStorageProvider
             _entries.TryRemove(new KeyValuePair<string, Held>(path, held));
         }
 
-        RemoteEntry answer = await _inner.GetAsync(path, cancellationToken).ConfigureAwait(false);
-
-        Remember(answer);
-
-        return answer;
+        // Remembered by the one that fetched, so that everybody who joined does not write
+        // down the same answer again.
+        return await _asking.JoinAsync(path, () => AskAsync(path), cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -248,7 +258,21 @@ public sealed class AttributeCache : IStorageProvider
 
     /// <inheritdoc/>
     public Task<StorageSpace> GetSpaceAsync(string path, CancellationToken cancellationToken = default) =>
-        _inner.GetSpaceAsync(path, cancellationToken);
+        _measuring.JoinAsync(
+            path,
+            () => _inner.GetSpaceAsync(path, CancellationToken.None),
+            cancellationToken);
+
+    // The fetch belongs to none of the callers waiting on it, so none of their tokens reaches
+    // it: one that gives up stops waiting and leaves it running for the others.
+    private async Task<RemoteEntry> AskAsync(string path)
+    {
+        RemoteEntry answer = await _inner.GetAsync(path, CancellationToken.None).ConfigureAwait(false);
+
+        Remember(answer);
+
+        return answer;
+    }
 
     private bool Fresh(Held held) => Stopwatch.GetElapsedTime(held.Stamp) < _lifetime;
 

@@ -502,6 +502,118 @@ public sealed class DirectoryCacheTests
     }
 
     // A cache that holds but never lists ahead, which is what a test about the holding wants.
+    [Fact]
+    public async Task TwoLooksAtOneDirectoryAtOnceAreOneListing()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        store.Hold();
+
+        Task<DirectoryListing> first = cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        // The second is asked once the first is on its way, which is what the store having
+        // written the question down says.
+        await WaitFor(() => store.Listed.Count >= 1);
+
+        Task<DirectoryListing> second = cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        store.Release();
+
+        DirectoryListing[] both = await Task.WhenAll(first, second);
+
+        // A listing of the root is fifteen kilobytes and about 160 milliseconds, and the
+        // second caller used to pay for both again.
+        Assert.Equal<string>(["/music"], store.Listed);
+        Assert.Same(both[0], both[1]);
+    }
+
+    [Fact]
+    public async Task AReaderWhoCatchesUpWithWhatIsBeingReadAheadJoinsIt()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings());
+
+        // Only the one read ahead, so that the listing somebody waited for goes through and
+        // the round behind it is still on the wire when he reaches what it is fetching.
+        store.Hold("/music/live");
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await WaitFor(store, 2);
+
+        Task<DirectoryListing> opened = cache.ListAsync("/music/live", TestContext.Current.CancellationToken);
+
+        store.Release();
+
+        await opened.ConfigureAwait(true);
+
+        // Six of the eight requests that overlapped an identical one at a live mount were
+        // this: the person had reached the directory the round behind him was fetching, and
+        // the listing on its way was not the one he waited for.
+        Assert.Equal<string>(["/music", "/music/live"], store.Listed);
+    }
+
+    [Fact]
+    public async Task AListingThatFailsFailsForEverybodyWaitingOnIt()
+    {
+        TreeStore store = new();
+
+        DirectoryCache cache = Cache(store, Off);
+
+        store.Hold();
+
+        Task<DirectoryListing> first = cache.ListAsync("/nothing", TestContext.Current.CancellationToken);
+
+        await WaitFor(() => store.Listed.Count >= 1);
+
+        Task<DirectoryListing> second = cache.ListAsync("/nothing", TestContext.Current.CancellationToken);
+
+        store.Release();
+
+        // What the fetch is told is what everybody waiting on it is told. The second had a
+        // request of its own before and might have got through where the first did not.
+        await Assert.ThrowsAsync<ProviderException>(() => first);
+        await Assert.ThrowsAsync<ProviderException>(() => second);
+
+        Assert.Equal<string>(["/nothing"], store.Listed);
+    }
+
+    [Fact]
+    public async Task TwoQuestionsAboutTheRoomAtOnceAreOneRequest()
+    {
+        TreeStore store = new();
+
+        DirectoryCache cache = Cache(store, Off);
+
+        store.Hold();
+
+        Task<StorageSpace> first = cache.GetSpaceAsync("/", TestContext.Current.CancellationToken);
+
+        await WaitFor(() => store.SpaceAsked >= 1);
+
+        Task<StorageSpace> second = cache.GetSpaceAsync("/", TestContext.Current.CancellationToken);
+
+        store.Release();
+
+        await Task.WhenAll(first, second);
+
+        Assert.Equal(1, store.SpaceAsked);
+
+        // Nothing is kept of it beyond the fetch: the next question is a request of its own,
+        // which is what the volume's own interval asks for.
+        await cache.GetSpaceAsync("/", TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, store.SpaceAsked);
+    }
+
     private static DirectorySettings Off => new() { Depth = 0 };
 
     private static RequestGate Gate() => new(2, NullLogger.Instance);
@@ -512,11 +624,14 @@ public sealed class DirectoryCacheTests
     // Listing ahead happens behind whoever asked, so a test that is about it has to wait for
     // it. It is done in microseconds against a dictionary; the patience is for a machine
     // under load, and reaching the end of it is the failure the assertion afterwards reports.
-    private static async Task WaitFor(TreeStore store, int listings)
+    private static Task WaitFor(TreeStore store, int listings) =>
+        WaitFor(() => store.Listed.Count >= listings);
+
+    private static async Task WaitFor(Func<bool> until)
     {
         long deadline = Environment.TickCount64 + (long)s_patience.TotalMilliseconds;
 
-        while (store.Listed.Count < listings && Environment.TickCount64 < deadline)
+        while (!until() && Environment.TickCount64 < deadline)
         {
             await Task.Delay(5, TestContext.Current.CancellationToken).ConfigureAwait(false);
         }
@@ -531,10 +646,14 @@ public sealed class DirectoryCacheTests
         private readonly Lock _sync = new();
 
         private string? _refused;
+        private string? _holding;
+        private TaskCompletionSource? _held;
 
         public List<string> Listed { get; } = [];
 
         public List<string> Asked { get; } = [];
+
+        public int SpaceAsked { get; private set; }
 
         public void AddDirectory(string path, string? version) => _directories[path] = version;
 
@@ -545,12 +664,32 @@ public sealed class DirectoryCacheTests
         // Everything under a path answers that the server will not take another request.
         public void RefuseBelow(string path) => _refused = path.EndsWith('/') ? path : path + '/';
 
-        public Task<DirectoryListing> ListAsync(string path, CancellationToken cancellationToken = default)
+        // Holds answers back until they are let go, which is what puts a second question on
+        // its way while the first is still in flight. A path holds that one alone, so that
+        // what a listing sets off behind it can be caught while it is still on the wire.
+        public void Hold(string? path = null)
+        {
+            _holding = path;
+            _held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public void Release()
+        {
+            TaskCompletionSource? held = _held;
+
+            _held = null;
+
+            held?.SetResult();
+        }
+
+        public async Task<DirectoryListing> ListAsync(string path, CancellationToken cancellationToken = default)
         {
             lock (_sync)
             {
                 Listed.Add(path);
             }
+
+            await Held(path).ConfigureAwait(false);
 
             if (_refused is { } below && path.StartsWith(below, StringComparison.Ordinal))
             {
@@ -580,8 +719,7 @@ public sealed class DirectoryCacheTests
                 }
             }
 
-            return Task.FromResult(
-                new DirectoryListing(children, new RemoteEntry(path, isDirectory: true) { ETag = version }));
+            return new DirectoryListing(children, new RemoteEntry(path, isDirectory: true) { ETag = version });
         }
 
         public Task<RemoteEntry> GetAsync(string path, CancellationToken cancellationToken = default)
@@ -657,8 +795,22 @@ public sealed class DirectoryCacheTests
             CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
 
-        public Task<StorageSpace> GetSpaceAsync(string path, CancellationToken cancellationToken = default) =>
-            Task.FromResult(StorageSpace.Unknown);
+        public async Task<StorageSpace> GetSpaceAsync(string path, CancellationToken cancellationToken = default)
+        {
+            lock (_sync)
+            {
+                SpaceAsked++;
+            }
+
+            await Held(path).ConfigureAwait(false);
+
+            return StorageSpace.Unknown;
+        }
+
+        private Task Held(string path) =>
+            _held is { } held && (_holding is null || string.Equals(_holding, path, StringComparison.Ordinal))
+                ? held.Task
+                : Task.CompletedTask;
 
         private static bool IsIn(string path, string directory)
         {

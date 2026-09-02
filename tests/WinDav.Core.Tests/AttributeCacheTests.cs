@@ -16,6 +16,20 @@ public sealed class AttributeCacheTests
     // let it run out halfway through one that is about the keeping.
     private static readonly TimeSpan s_brief = TimeSpan.FromMilliseconds(200);
 
+    // How long a test waits for a question asked from somewhere other than the test. Never
+    // reached when it arrives, and it arrives in microseconds against a store that is a set.
+    private static readonly TimeSpan s_patience = TimeSpan.FromSeconds(10);
+
+    private static async Task WaitFor(Func<bool> until)
+    {
+        long deadline = Environment.TickCount64 + (long)s_patience.TotalMilliseconds;
+
+        while (!until() && Environment.TickCount64 < deadline)
+        {
+            await Task.Delay(5, TestContext.Current.CancellationToken).ConfigureAwait(false);
+        }
+    }
+
     [Fact]
     public async Task TheSecondQuestionAboutAPathIsAnsweredFromTheFirst()
     {
@@ -250,6 +264,80 @@ public sealed class AttributeCacheTests
     }
 
     [Fact]
+    public async Task TheSecondQuestionAboutAPathInFlightWaitsForTheFirst()
+    {
+        CountingStore store = new();
+
+        store.Add("/music/one.mp3");
+
+        AttributeCache cache = new(store);
+
+        store.Hold();
+
+        // What opening a file does when the first answer is not back yet: WinFsp asks whether
+        // the name may be opened, and opens it, and both used to be requests.
+        Task<RemoteEntry> asked = cache.GetAsync("/music/one.mp3", TestContext.Current.CancellationToken);
+
+        await WaitFor(() => store.Asked.Count >= 1);
+
+        Task<RemoteEntry> opened = cache.GetAsync("/music/one.mp3", TestContext.Current.CancellationToken);
+
+        store.Release();
+
+        RemoteEntry[] both = await Task.WhenAll(asked, opened);
+
+        Assert.Equal<string>(["/music/one.mp3"], store.Asked);
+        Assert.Same(both[0], both[1]);
+    }
+
+    [Fact]
+    public async Task AQuestionThatFailsFailsForEverybodyWaitingOnIt()
+    {
+        CountingStore store = new();
+
+        AttributeCache cache = new(store);
+
+        store.Hold();
+
+        Task<RemoteEntry> first = cache.GetAsync("/nothing", TestContext.Current.CancellationToken);
+
+        await WaitFor(() => store.Asked.Count >= 1);
+
+        Task<RemoteEntry> second = cache.GetAsync("/nothing", TestContext.Current.CancellationToken);
+
+        store.Release();
+
+        // What the fetch is told is what everybody waiting on it is told, and nothing of it
+        // is kept: what is not there is the one answer that must not be remembered.
+        await Assert.ThrowsAsync<ProviderException>(() => first);
+        await Assert.ThrowsAsync<ProviderException>(() => second);
+
+        Assert.Equal<string>(["/nothing"], store.Asked);
+    }
+
+    [Fact]
+    public async Task TwoQuestionsAboutTheRoomAtOnceAreOneRequest()
+    {
+        CountingStore store = new();
+
+        AttributeCache cache = new(store);
+
+        store.Hold();
+
+        Task<StorageSpace> first = cache.GetSpaceAsync("/", TestContext.Current.CancellationToken);
+
+        await WaitFor(() => store.SpaceAsked >= 1);
+
+        Task<StorageSpace> second = cache.GetSpaceAsync("/", TestContext.Current.CancellationToken);
+
+        store.Release();
+
+        await Task.WhenAll(first, second);
+
+        Assert.Equal(1, store.SpaceAsked);
+    }
+
+    [Fact]
     public void ACacheThatHoldsNothingIsALayerThatShouldNotHaveBeenBuilt()
     {
         CountingStore store = new();
@@ -264,6 +352,9 @@ public sealed class AttributeCacheTests
     private sealed class CountingStore : IStorageProvider
     {
         private readonly HashSet<string> _paths = new(StringComparer.Ordinal);
+        private readonly Lock _sync = new();
+
+        private TaskCompletionSource? _held;
 
         public List<string> Asked { get; } = [];
 
@@ -274,6 +365,19 @@ public sealed class AttributeCacheTests
         public int SpaceAsked { get; private set; }
 
         public void Add(string path) => _paths.Add(path);
+
+        // Holds every answer back until it is let go, which is what puts a second question on
+        // its way while the first is still in flight.
+        public void Hold() => _held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Release()
+        {
+            TaskCompletionSource? held = _held;
+
+            _held = null;
+
+            held?.SetResult();
+        }
 
         public Task<DirectoryListing> ListAsync(
             string path,
@@ -299,12 +403,17 @@ public sealed class AttributeCacheTests
             return Task.FromResult(new DirectoryListing(children));
         }
 
-        public Task<RemoteEntry> GetAsync(string path, CancellationToken cancellationToken = default)
+        public async Task<RemoteEntry> GetAsync(string path, CancellationToken cancellationToken = default)
         {
-            Asked.Add(path);
+            lock (_sync)
+            {
+                Asked.Add(path);
+            }
+
+            await Held().ConfigureAwait(false);
 
             return _paths.Contains(path)
-                ? Task.FromResult(new RemoteEntry(path, isDirectory: false))
+                ? new RemoteEntry(path, isDirectory: false)
                 : throw new ProviderException(ProviderError.NotFound, $"Nothing at {path}.");
         }
 
@@ -371,11 +480,18 @@ public sealed class AttributeCacheTests
             return Task.CompletedTask;
         }
 
-        public Task<StorageSpace> GetSpaceAsync(string path, CancellationToken cancellationToken = default)
+        public async Task<StorageSpace> GetSpaceAsync(string path, CancellationToken cancellationToken = default)
         {
-            SpaceAsked++;
+            lock (_sync)
+            {
+                SpaceAsked++;
+            }
 
-            return Task.FromResult(StorageSpace.Unknown);
+            await Held().ConfigureAwait(false);
+
+            return StorageSpace.Unknown;
         }
+
+        private Task Held() => _held?.Task ?? Task.CompletedTask;
     }
 }
