@@ -94,6 +94,124 @@ public sealed class DirectoryCacheTests
     }
 
     [Fact]
+    public async Task ANameThatIsNotInAHeldListingIsAnsweredWithoutAsking()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/one.mp3");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        // What a status cache asks about every folder a window shows, over and over.
+        ProviderException failure = await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
+
+        Assert.Equal(ProviderError.NotFound, failure.Error);
+        Assert.Empty(store.Asked);
+    }
+
+    [Fact]
+    public async Task ANameInTheWrongCaseIsNotInTheListingEither()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/one.mp3");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        // The store keeps case, so this is the right answer and not a shortcut around one.
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/ONE.MP3", TestContext.Current.CancellationToken));
+
+        Assert.Empty(store.Asked);
+    }
+
+    [Fact]
+    public async Task ANameIsAskedAboutWhenTheListingAroundItHasRunOut()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+
+        DirectoryCache cache = Cache(store, Off, s_brief);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await Task.Delay(s_brief + s_brief, TestContext.Current.CancellationToken);
+
+        // A listing that has run out proves nothing, and the directory around it is not
+        // fetched to make it prove something: that would cost more than the question does.
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
+
+        Assert.Equal<string>(["/music/.git"], store.Asked);
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ANameInADirectoryThatWasNeverListedIsAskedAbout()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
+
+        Assert.Equal<string>(["/music/.git"], store.Asked);
+        Assert.Empty(store.Listed);
+    }
+
+    [Fact]
+    public async Task ANameUnderADirectoryTheListingDoesNotHaveIsAnsweredWithoutAsking()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/", "v1");
+        store.AddDirectory("/music", "v2");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.ListAsync("/", TestContext.Current.CancellationToken);
+
+        // The whole path arrives at once, and nothing has ever listed '/etc' because there
+        // is no '/etc'. What says so is the listing two levels up.
+        ProviderException failure = await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/etc/gnutls/config", TestContext.Current.CancellationToken));
+
+        Assert.Equal(ProviderError.NotFound, failure.Error);
+        Assert.Empty(store.Asked);
+    }
+
+    [Fact]
+    public async Task ANameUnderADirectoryTheListingHasIsAskedAbout()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/", "v1");
+        store.AddDirectory("/music", "v2");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.ListAsync("/", TestContext.Current.CancellationToken);
+
+        // '/music' is there, so what is in it is the server's to say and nothing above has
+        // been told about it.
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/live/one.mp3", TestContext.Current.CancellationToken));
+
+        Assert.Equal<string>(["/music/live/one.mp3"], store.Asked);
+    }
+
+    [Fact]
     public async Task AVersionThatHasNotChangedKeepsWhatIsHeldBelowIt()
     {
         TreeStore store = new();
