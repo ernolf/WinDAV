@@ -299,6 +299,9 @@ internal static class Program
               rather than in entries, and what a round does not get to is dropped rather than
               done later. --listings is how many listings are held at once; the ones longest
               without being proven current are let go of first. Nothing is written to disk.
+              A question about a single name is answered out of a listing and never asked on
+              its own: where the directory around the name is not held, listing it is the
+              same one request and settles every other name in it as well.
               A listing is held for as long as an attribute, because it is the same request
               that says whether it still holds, so --attributes off switches this off as well.
               Each of the three takes off, and with all three off a directory is listed when

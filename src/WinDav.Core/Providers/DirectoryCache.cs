@@ -42,6 +42,15 @@ namespace WinDav.Core.Providers;
 /// otherwise be one request per name.
 /// </para>
 /// <para>
+/// A question about a single name is settled here and never on the wire. Where nothing held
+/// settles it, the directory around the name is listed and the answer comes out of that
+/// listing: it is the same one request that a question about the name would have been, and it
+/// answers every other name in that directory for as long as it is held. Over two runs at a
+/// live mount, questions about single names were 82 of 289 requests and 126 of 235; under the
+/// rule they are none, and the total falls by a fifth and by a third. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#80-a-question-about-a-single-name-is-settled-inside-the-mount-never-on-the-wire">decision 80</see>.
+/// </para>
+/// <para>
 /// A version missing on either side vouches for nothing and is believed as nothing: what is
 /// held then ages out by itself, which is the behaviour of a store that has no versions for
 /// directories at all, and it is never wrong. Nothing here is written to disk, and holding
@@ -160,9 +169,9 @@ public sealed class DirectoryCache : IStorageProvider
     /// <inheritdoc/>
     public async Task<DirectoryListing> ListAsync(string path, CancellationToken cancellationToken = default)
     {
-        if (_listings.TryGetValue(path, out Held held) && Fresh(held))
+        if (Current(path) is DirectoryListing current)
         {
-            return new DirectoryListing(held.Entries, held.Self);
+            return current;
         }
 
         // A round belongs to the listing somebody waited for. What the round before it did
@@ -200,6 +209,22 @@ public sealed class DirectoryCache : IStorageProvider
             throw new ProviderException(ProviderError.NotFound, $"There is nothing at '{path}'.");
         }
 
+        // Nothing held settles the name, so the directory around it is listed and the answer
+        // is read out of that listing. One request either way, and where a question about the
+        // name would have bought that one answer once, the listing answers every name in that
+        // directory for as long as it holds.
+        if (ParentOf(path) is string around)
+        {
+            DirectoryListing listing = await AroundAsync(around, cancellationToken)
+                .ConfigureAwait(false);
+
+            return Find(listing.Entries, path)
+                ?? throw new ProviderException(
+                    ProviderError.NotFound,
+                    $"There is nothing at '{path}'.");
+        }
+
+        // The root, which has no directory around it to be listed instead.
         return await _inner.GetAsync(path, cancellationToken).ConfigureAwait(false);
     }
 
@@ -324,17 +349,17 @@ public sealed class DirectoryCache : IStorageProvider
 
     // Ordinal, because the store keeps case: a listing that holds one spelling is not a
     // listing that holds another.
-    private static bool Holds(IReadOnlyList<RemoteEntry> entries, string path)
+    private static RemoteEntry? Find(IReadOnlyList<RemoteEntry> entries, string path)
     {
         foreach (RemoteEntry entry in entries)
         {
             if (string.Equals(entry.Path, path, StringComparison.Ordinal))
             {
-                return true;
+                return entry;
             }
         }
 
-        return false;
+        return null;
     }
 
     // The file system is handed a whole path at once rather than a component at a time, so
@@ -360,10 +385,21 @@ public sealed class DirectoryCache : IStorageProvider
                     DirectoryListing listing = await ListAsync(above, cancellationToken)
                         .ConfigureAwait(false);
 
-                    return !Holds(listing.Entries, child);
+                    return Find(listing.Entries, child) is null;
                 }
 
-                return !Holds(held.Entries, child);
+                return Find(held.Entries, child) is null;
+            }
+
+            // Nothing written down, but a listing of this directory is on its way. What it
+            // will say is the answer, and waiting for it is a request that is not sent: a
+            // listing is written down after it has come back and been parsed, and these
+            // questions arrive in that window.
+            if (_fetching.Joined(above, cancellationToken) is Task<DirectoryListing> running)
+            {
+                DirectoryListing listing = await running.ConfigureAwait(false);
+
+                return Find(listing.Entries, child) is null;
             }
 
             child = above;
@@ -373,6 +409,18 @@ public sealed class DirectoryCache : IStorageProvider
     }
 
     private bool Fresh(Held held) => Stopwatch.GetElapsedTime(held.Stamp) < _lifetime;
+
+    // What is held of a directory, where it is held and still holds.
+    private DirectoryListing? Current(string path) =>
+        _listings.TryGetValue(path, out Held held) && Fresh(held)
+            ? new DirectoryListing(held.Entries, held.Self)
+            : null;
+
+    // The directory a single name was asked about, listed at depth nothing: nobody opened it,
+    // somebody asked about one name in it, and what is read ahead belongs to a directory a
+    // person is looking at.
+    private async Task<DirectoryListing> AroundAsync(string path, CancellationToken cancellationToken) =>
+        Current(path) ?? await FetchAsync(path, 0, cancellationToken).ConfigureAwait(false);
 
     // Every fetch goes through here, the one somebody is waiting for and the one read ahead
     // alike: the two meet on a directory the reader has reached first, and one of them is a

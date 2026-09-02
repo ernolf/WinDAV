@@ -67,6 +67,22 @@ internal sealed class InFlight<TResult>
         return running.Value.WaitAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Waits on the fetch for a path where one is running, and answers with nothing where
+    /// none is.
+    /// </summary>
+    /// <param name="path">What the question is about.</param>
+    /// <param name="cancellationToken">Ends the waiting. It does not end the fetch.</param>
+    /// <returns>
+    /// What the running fetch answers with, or <see langword="null"/> where nothing is
+    /// running for the path. This is for a caller that has an answer of its own and wants
+    /// only the one already on its way; it asks for no fetch that nobody wanted.
+    /// </returns>
+    public Task<TResult>? Joined(string path, CancellationToken cancellationToken) =>
+        _running.TryGetValue(path, out Lazy<Task<TResult>>? running)
+            ? running.Value.WaitAsync(cancellationToken)
+            : null;
+
     private async Task<TResult> RunAsync(string path, Func<Task<TResult>> fetch)
     {
         try
