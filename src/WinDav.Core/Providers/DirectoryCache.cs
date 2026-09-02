@@ -36,16 +36,20 @@ namespace WinDav.Core.Providers;
 /// at a live mount, 2304 of 5458 requests were lookups of names that do not exist, asked by
 /// programs that watch every folder a window shows. The listing that answers need not be the
 /// one directly around the name: a whole path arrives at once, and the nearest listing above
-/// it that still holds settles it, because a directory that is not there has nothing under it.
+/// it settles it, because a directory that is not there has nothing under it. Where that
+/// listing has run out it is fetched again rather than stepped over: these names arrive in
+/// bursts far shorter than a listing lives, so one listing answers a whole burst that would
+/// otherwise be one request per name.
 /// </para>
 /// <para>
 /// A version missing on either side vouches for nothing and is believed as nothing: what is
 /// held then ages out by itself, which is the behaviour of a store that has no versions for
 /// directories at all, and it is never wrong. Nothing here is written to disk, and holding
 /// nothing is one of the settings. See
-/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#76-listings-are-kept-an-etag-says-whether-they-still-hold-and-f5-throws-them-away">decision 76</see>
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#76-listings-are-kept-an-etag-says-whether-they-still-hold-and-f5-throws-them-away">decision 76</see>,
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#77-a-listing-that-is-held-answers-what-is-not-in-it">decision 77</see>
 /// and
-/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#77-a-listing-that-is-held-answers-what-is-not-in-it">decision 77</see>.
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#78-a-listing-that-has-run-out-is-fetched-again-when-a-name-in-it-is-asked-for">decision 78</see>.
 /// </para>
 /// </remarks>
 public sealed class DirectoryCache : IStorageProvider
@@ -176,10 +180,10 @@ public sealed class DirectoryCache : IStorageProvider
         }
 
         // What says a directory holds these entries says as plainly that it holds no others.
-        // Only a listing that still holds answers this: a stale one is not fetched for the
-        // question, because a listing of the directory above costs more than the question
-        // costs on its own, and nobody is waiting on a name that is not there.
-        if (Missing(path))
+        // The nearest listing that is held answers this, and one that has run out is fetched
+        // again before it does: three times the bytes for a ninth of the round trips, counted
+        // against a live mount.
+        if (await MissingAsync(path, cancellationToken).ConfigureAwait(false))
         {
             throw new ProviderException(ProviderError.NotFound, $"There is nothing at '{path}'.");
         }
@@ -308,9 +312,9 @@ public sealed class DirectoryCache : IStorageProvider
 
     // Ordinal, because the store keeps case: a listing that holds one spelling is not a
     // listing that holds another.
-    private static bool Holds(Held held, string path)
+    private static bool Holds(IReadOnlyList<RemoteEntry> entries, string path)
     {
-        foreach (RemoteEntry entry in held.Entries)
+        foreach (RemoteEntry entry in entries)
         {
             if (string.Equals(entry.Path, path, StringComparison.Ordinal))
             {
@@ -323,19 +327,31 @@ public sealed class DirectoryCache : IStorageProvider
 
     // The file system is handed a whole path at once rather than a component at a time, so
     // the directory a name is in is often one nothing has ever listed while a directory
-    // above it is held. The nearest listing that still holds decides: it says whether the
-    // one step below it is there at all, and a step that is not there takes everything under
-    // it with it. Where that step is there, nothing above says anything about the names
-    // further down, and the question goes to the server as before.
-    private bool Missing(string path)
+    // above it is held. The nearest listing that is held decides: it says whether the one
+    // step below it is there at all, and a step that is not there takes everything under it
+    // with it. Where that step is there, nothing above says anything about the names further
+    // down, and the question goes to the server as before.
+    private async Task<bool> MissingAsync(string path, CancellationToken cancellationToken)
     {
         string child = path;
 
         for (string? above = ParentOf(path); above is not null; above = ParentOf(above))
         {
-            if (_listings.TryGetValue(above, out Held held) && Fresh(held))
+            if (_listings.TryGetValue(above, out Held held))
             {
-                return !Holds(held, child);
+                // Held, but run out. Fetched again rather than stepped over: these names
+                // arrive in bursts far shorter than a listing lives, because what asks is
+                // walking a path upwards, so the one listing answers the whole burst where
+                // the burst is otherwise one request per name.
+                if (!Fresh(held))
+                {
+                    DirectoryListing listing = await ListAsync(above, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    return !Holds(listing.Entries, child);
+                }
+
+                return !Holds(held.Entries, child);
             }
 
             child = above;
