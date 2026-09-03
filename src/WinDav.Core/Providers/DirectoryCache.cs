@@ -51,6 +51,16 @@ namespace WinDav.Core.Providers;
 /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#80-a-question-about-a-single-name-is-settled-inside-the-mount-never-on-the-wire">decision 80</see>.
 /// </para>
 /// <para>
+/// A name that has been looked for in other directories and found in none of them buys no
+/// listing. Over four runs at a live mount, 269 of 2199 questions about a single name fell
+/// in a directory nothing had listed, and not one of them named something that was there;
+/// the names behind them were the same few, asked for in directory after directory and
+/// present in none. Such a name is answered as absent and no listing is bought to say so,
+/// which takes 247 of those 269 requests off the wire. A directory that is held answers out
+/// of its listing whatever the name is. See
+/// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#81-a-name-not-found-elsewhere-buys-no-listing">decision 81</see>.
+/// </para>
+/// <para>
 /// A version missing on either side vouches for nothing and is believed as nothing: what is
 /// held then ages out by itself, which is the behaviour of a store that has no versions for
 /// directories at all, and it is never wrong. Nothing here is written to disk, and holding
@@ -72,6 +82,15 @@ public sealed class DirectoryCache : IStorageProvider
     // Ordinal, for the reason the attribute cache is ordinal: a store that keeps case has two
     // directories where these differ.
     private readonly ConcurrentDictionary<string, Held> _listings = new(StringComparer.Ordinal);
+
+    // The directories a name was asked for in and not found in, and the names that have
+    // reached the threshold. Ordinal for the reason the listings are ordinal: a store that
+    // keeps case has two names where these differ. The directories of a name are let go of
+    // once it is burned, because nothing is counted about it after that.
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _nowhere
+        = new(StringComparer.Ordinal);
+
+    private readonly ConcurrentDictionary<string, byte> _burned = new(StringComparer.Ordinal);
 
     // What is on its way. A caller that finds a fetch for its path already running waits
     // on that one instead of sending the same request again; the two are apart because a
@@ -206,22 +225,42 @@ public sealed class DirectoryCache : IStorageProvider
         // against a live mount.
         if (await MissingAsync(path, cancellationToken).ConfigureAwait(false))
         {
+            Nowhere(path);
+
             throw new ProviderException(ProviderError.NotFound, $"There is nothing at '{path}'.");
         }
 
         // Nothing held settles the name, so the directory around it is listed and the answer
         // is read out of that listing. One request either way, and where a question about the
         // name would have bought that one answer once, the listing answers every name in that
-        // directory for as long as it holds.
+        // directory for as long as it holds. Unless the name is one that has been looked for
+        // in other directories and found in none of them, which is what a probe asks for:
+        // that one is absent, and no listing is bought to say so.
         if (ParentOf(path) is string around)
         {
-            DirectoryListing listing = await AroundAsync(around, cancellationToken)
-                .ConfigureAwait(false);
+            if (Current(around) is not DirectoryListing listing)
+            {
+                if (Burned(path))
+                {
+                    throw new ProviderException(
+                        ProviderError.NotFound,
+                        $"There is nothing at '{path}'.");
+                }
 
-            return Find(listing.Entries, path)
-                ?? throw new ProviderException(
-                    ProviderError.NotFound,
-                    $"There is nothing at '{path}'.");
+                // Listed at depth nothing: nobody opened that directory, somebody asked about
+                // one name in it, and what is read ahead belongs to a directory a person is
+                // looking at.
+                listing = await FetchAsync(around, 0, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (Find(listing.Entries, path) is RemoteEntry entry)
+            {
+                return entry;
+            }
+
+            Nowhere(path);
+
+            throw new ProviderException(ProviderError.NotFound, $"There is nothing at '{path}'.");
         }
 
         // The root, which has no directory around it to be listed instead.
@@ -416,11 +455,43 @@ public sealed class DirectoryCache : IStorageProvider
             ? new DirectoryListing(held.Entries, held.Self)
             : null;
 
-    // The directory a single name was asked about, listed at depth nothing: nobody opened it,
-    // somebody asked about one name in it, and what is read ahead belongs to a directory a
-    // person is looking at.
-    private async Task<DirectoryListing> AroundAsync(string path, CancellationToken cancellationToken) =>
-        Current(path) ?? await FetchAsync(path, 0, cancellationToken).ConfigureAwait(false);
+    // The name at the end of a path. What is counted about a probe is the name and never the
+    // path, because the same name is what arrives in directory after directory.
+    private static string NameOf(string path) => path[(path.LastIndexOf('/') + 1)..];
+
+    private bool Burned(string path) =>
+        _settings.Probes > 0 && _burned.ContainsKey(NameOf(path));
+
+    // One more directory a name was not in, and the name is burned once there are enough of
+    // them. Only where a name was absent is counted; one that was found is not counted at all.
+    private void Nowhere(string path)
+    {
+        if (_settings.Probes <= 0 || ParentOf(path) is not string around)
+        {
+            return;
+        }
+
+        string name = NameOf(path);
+
+        if (_burned.ContainsKey(name))
+        {
+            return;
+        }
+
+        ConcurrentDictionary<string, byte> directories = _nowhere.GetOrAdd(
+            name,
+            _ => new ConcurrentDictionary<string, byte>(StringComparer.Ordinal));
+
+        directories[around] = 0;
+
+        if (directories.Count < _settings.Probes)
+        {
+            return;
+        }
+
+        _burned[name] = 0;
+        _nowhere.TryRemove(name, out _);
+    }
 
     // Every fetch goes through here, the one somebody is waiting for and the one read ahead
     // alike: the two meet on a directory the reader has reached first, and one of them is a

@@ -8,16 +8,16 @@ namespace WinDav.Cli;
 
 /// <summary>
 /// What was asked about listing: how far below an open directory a mount may list ahead, how
-/// many requests one round of that may make, and how many listings it may hold.
+/// many requests one round of that may make, how many listings it may hold, and when a name
+/// that is nowhere stops buying one.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Three options, in the manner of the three of the read path: <c>--list-ahead</c>,
-/// <c>--list-ahead-requests</c> and <c>--listings</c>, each an environment variable as well and
-/// the command line the more particular of the two. Every one of them takes <c>off</c>, and
-/// with all three off a directory is listed when it is opened and at no other time, which is
-/// how a report about a directory that showed the wrong contents is narrowed down to the layer
-/// that caused it.
+/// Four options: <c>--list-ahead</c>, <c>--list-ahead-requests</c>, <c>--listings</c> and
+/// <c>--probes</c>, each an environment variable as well and the command line the more
+/// particular of the two. Every one of them takes <c>off</c>, and with the first three off a
+/// directory is listed when it is opened and at no other time, which is how a report about a
+/// directory that showed the wrong contents is narrowed down to the layer that caused it.
 /// </para>
 /// <para>
 /// How long a listing is believed is not asked here: it is the same length of time as an
@@ -41,6 +41,12 @@ internal static class DirectorySwitches
 
     /// <summary>The option that says how many listings may be held at once.</summary>
     internal const string DirectoriesOption = "--listings";
+
+    /// <summary>
+    /// The option that says in how many directories a name must have been looked for and not
+    /// found before a question about it stops buying a listing.
+    /// </summary>
+    internal const string ProbesOption = "--probes";
 
     private const string Off = "off";
 
@@ -76,17 +82,22 @@ internal static class DirectorySwitches
             ? ReadCount(held, DirectoriesOption, "directories")
             : DirectorySettings.DefaultDirectories;
 
+        int probes = Switches.Asked(line, ProbesOption, read, out string? nowhere)
+            ? ReadCount(nowhere, ProbesOption, "directories")
+            : DirectorySettings.DefaultProbes;
+
         return new DirectorySettings
         {
             Depth = depth,
             Requests = requests,
             Directories = directories,
+            Probes = probes,
         };
     }
 
     // Whole numbers and no sign, the way the width of the read path is read. Zero is off
-    // written as a number, and it is a real value for all three: no level below, no request in
-    // a round, no listing held.
+    // written as a number, and it is a real value for all four: no level below, no request in
+    // a round, no listing held, and no name ever taken for a probe.
     private static int ReadCount(string? value, string option, string counted)
     {
         if (value is null)
