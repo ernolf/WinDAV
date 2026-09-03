@@ -659,7 +659,7 @@ public sealed class DirectoryCache : IStorageProvider
             return;
         }
 
-        bool any = false;
+        List<RemoteEntry> wanted = [];
 
         foreach (RemoteEntry entry in entries)
         {
@@ -668,15 +668,30 @@ public sealed class DirectoryCache : IStorageProvider
                 continue;
             }
 
-            _queue.Enqueue(new Wanted(entry.Path, depth - 1));
-
-            any = true;
+            wanted.Add(entry);
         }
 
-        if (any)
+        if (wanted.Count == 0)
         {
-            Pump();
+            return;
         }
+
+        // Newest first. A round is a few seconds long at two requests in flight, and what it
+        // does not reach is dropped rather than carried over, so the order decides both which
+        // directories the round gets to and which of them arrive before the person does. A
+        // name says nothing about who opens it next; the time of the last change says
+        // something, and it came with the listing at no cost. Only the children of one
+        // directory are ever compared, which is what makes a server that carries a change
+        // upwards the right answer here rather than the wrong one. The order is stable, so
+        // equal times keep the order the server gave, and a child the store gave no time for
+        // goes last rather than out: not every store fills it in.
+        foreach (RemoteEntry child in wanted.OrderByDescending(
+            directory => directory.LastModified ?? DateTimeOffset.MinValue))
+        {
+            _queue.Enqueue(new Wanted(child.Path, depth - 1));
+        }
+
+        Pump();
     }
 
     private void Pump()

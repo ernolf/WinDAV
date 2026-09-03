@@ -24,6 +24,9 @@ public sealed class DirectoryCacheTests
     // work is done, and it is done in microseconds against a store that is a dictionary.
     private static readonly TimeSpan s_patience = TimeSpan.FromSeconds(10);
 
+    // What the store calls now, for the tests that are about how long ago something changed.
+    private static readonly DateTimeOffset s_now = new(2026, 9, 4, 12, 0, 0, TimeSpan.Zero);
+
     [Fact]
     public async Task TheSecondLookAtADirectoryIsAnsweredFromTheFirst()
     {
@@ -586,6 +589,89 @@ public sealed class DirectoryCacheTests
     }
 
     [Fact]
+    public async Task TheDirectoryThatChangedLastIsReadAheadFirst()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1", s_now);
+        store.AddDirectory("/music/archive", "v2", s_now.AddYears(-1));
+        store.AddDirectory("/music/live", "v3", s_now.AddDays(-30));
+        store.AddDirectory("/music/studio", "v4", s_now.AddMinutes(-5));
+
+        // Room for one, so which one it is is the whole of the answer.
+        DirectoryCache cache = Cache(store, new DirectorySettings { Requests = 1 });
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await WaitFor(store, 2);
+        await Task.Delay(s_brief, TestContext.Current.CancellationToken);
+
+        // By name the round would have spent itself on the one nobody has touched in a year.
+        Assert.Equal<string>(["/music", "/music/studio"], store.Listed);
+    }
+
+    [Fact]
+    public async Task DirectoriesOfTheSameAgeKeepTheOrderTheServerGave()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1", s_now);
+        store.AddDirectory("/music/archive", "v2", s_now.AddDays(-7));
+        store.AddDirectory("/music/live", "v3", s_now.AddDays(-7));
+        store.AddDirectory("/music/studio", "v4", s_now.AddDays(-7));
+
+        DirectoryCache cache = Cache(store, new DirectorySettings { Requests = 1 });
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await WaitFor(store, 2);
+        await Task.Delay(s_brief, TestContext.Current.CancellationToken);
+
+        // A tree where nothing has changed behaves as it did before any of this.
+        Assert.Equal<string>(["/music", "/music/archive"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ADirectoryTheStoreGaveNoTimeForGoesLast()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1", s_now);
+        store.AddDirectory("/music/archive", "v2");
+        store.AddDirectory("/music/studio", "v3", s_now.AddYears(-1));
+
+        DirectoryCache cache = Cache(store, new DirectorySettings { Requests = 1 });
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await WaitFor(store, 2);
+        await Task.Delay(s_brief, TestContext.Current.CancellationToken);
+
+        // A year old still beats no answer at all: nothing is known about the one without.
+        Assert.Equal<string>(["/music", "/music/studio"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ADirectoryTheStoreGaveNoTimeForIsStillReadAhead()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1", s_now);
+        store.AddDirectory("/music/archive", "v2");
+        store.AddDirectory("/music/studio", "v3", s_now.AddMinutes(-5));
+
+        DirectoryCache cache = Cache(store, new DirectorySettings());
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await WaitFor(store, 3);
+
+        // Last is not out. getlastmodified is not guaranteed on a collection, and a store
+        // that fills in none of them would otherwise read nothing ahead at all.
+        Assert.Equal<string>(["/music", "/music/archive", "/music/studio"], store.Listed.Order());
+    }
+
+    [Fact]
     public async Task ADepthOfNothingListsNothingAhead()
     {
         TreeStore store = new();
@@ -862,6 +948,7 @@ public sealed class DirectoryCacheTests
     private sealed class TreeStore : IStorageProvider
     {
         private readonly Dictionary<string, string?> _directories = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, DateTimeOffset?> _times = new(StringComparer.Ordinal);
         private readonly HashSet<string> _files = new(StringComparer.Ordinal);
         private readonly Lock _sync = new();
 
@@ -875,7 +962,11 @@ public sealed class DirectoryCacheTests
 
         public int SpaceAsked { get; private set; }
 
-        public void AddDirectory(string path, string? version) => _directories[path] = version;
+        public void AddDirectory(string path, string? version, DateTimeOffset? modified = null)
+        {
+            _directories[path] = version;
+            _times[path] = modified;
+        }
 
         public void AddFile(string path) => _files.Add(path);
 
@@ -927,7 +1018,11 @@ public sealed class DirectoryCacheTests
             {
                 if (IsIn(directory.Key, path))
                 {
-                    children.Add(new RemoteEntry(directory.Key, isDirectory: true) { ETag = directory.Value });
+                    children.Add(new RemoteEntry(directory.Key, isDirectory: true)
+                    {
+                        ETag = directory.Value,
+                        LastModified = _times.GetValueOrDefault(directory.Key),
+                    });
                 }
             }
 
@@ -938,6 +1033,11 @@ public sealed class DirectoryCacheTests
                     children.Add(new RemoteEntry(file, isDirectory: false));
                 }
             }
+
+            // A server hands a directory over in an order of its own, and by name is the one
+            // the read-ahead used to queue in. What a dictionary enumerates in is no order to
+            // rest a test on.
+            children.Sort((left, right) => string.CompareOrdinal(left.Path, right.Path));
 
             return new DirectoryListing(children, new RemoteEntry(path, isDirectory: true) { ETag = version });
         }
