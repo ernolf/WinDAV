@@ -245,6 +245,125 @@ public sealed class DirectoryCacheTests
     }
 
     [Fact]
+    public async Task ANameFoundInNoOtherDirectoryBuysNoListing()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/photos", "v2");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
+
+        // The name is now one that was looked for and found nowhere, so the directory around
+        // it is not listed to say so a second time.
+        ProviderException failure = await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/photos/.git", TestContext.Current.CancellationToken));
+
+        Assert.Equal(ProviderError.NotFound, failure.Error);
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ADirectoryThatIsHeldAnswersSuchANameOutOfItsListing()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/photos", "v2");
+        store.AddFile("/photos/.git");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
+
+        await cache.ListAsync("/photos", TestContext.Current.CancellationToken);
+
+        // What is held says what is there, and the rule about names that are nowhere has
+        // nothing to say against a listing.
+        RemoteEntry entry = await cache.GetAsync("/photos/.git", TestContext.Current.CancellationToken);
+
+        Assert.Equal("/photos/.git", entry.Path);
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music", "/photos"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ANameLookedForNowhereElseStillBuysTheListing()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/photos", "v2");
+        store.AddFile("/photos/one.mp3");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
+
+        // What a person opens: a name nothing has looked for elsewhere, in a directory
+        // nothing holds. It buys the listing, as decision 80 says.
+        RemoteEntry entry = await cache.GetAsync("/photos/one.mp3", TestContext.Current.CancellationToken);
+
+        Assert.Equal("/photos/one.mp3", entry.Path);
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music", "/photos"], store.Listed);
+    }
+
+    [Fact]
+    public async Task OneDirectoryIsNotEnoughWhereTwoAreAskedFor()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/photos", "v2");
+        store.AddDirectory("/films", "v3");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings { Depth = 0, Probes = 2 });
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/photos/.git", TestContext.Current.CancellationToken));
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/films/.git", TestContext.Current.CancellationToken));
+
+        // The second directory is what burns the name here, so the third is the first to be
+        // answered without a request.
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music", "/photos"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ProbesOffListsTheDirectoryForEveryName()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/photos", "v2");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings { Depth = 0, Probes = 0 });
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/photos/.git", TestContext.Current.CancellationToken));
+
+        // No name is ever taken for a probe, which is how a report about a name answered as
+        // absent that was there is narrowed down to this rule.
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music", "/photos"], store.Listed);
+    }
+
+    [Fact]
     public async Task TheRootHasNoDirectoryAroundItAndIsAskedAbout()
     {
         TreeStore store = new();

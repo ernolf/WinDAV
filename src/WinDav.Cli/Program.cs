@@ -249,6 +249,8 @@ internal static class Program
               --list-ahead-requests <count>
                                    How many requests one round of that may make: 32, or off.
               --listings <count>   How many directory listings are held at once: 512, or off.
+              --probes <count>     How many directories a name must be missing from before a
+                                   question about it stops buying a listing: 1, or off.
 
             Logging:
               A record is written to %LOCALAPPDATA%\{ProductInfo.Slug}\logs whatever happens,
@@ -302,12 +304,18 @@ internal static class Program
               A question about a single name is answered out of a listing and never asked on
               its own: where the directory around the name is not held, listing it is the
               same one request and settles every other name in it as well.
+              --probes is where that stops. A name looked for in that many directories and
+              found in none of them is what a shell extension asks for while it walks the
+              folders a window shows, and a question about it buys no listing; --probes off
+              lists the directory for every name, as before. A directory that is held
+              answers out of its listing whatever the name is, and what was counted goes
+              when the mount does.
               A listing is held for as long as an attribute, because it is the same request
               that says whether it still holds, so --attributes off switches this off as well.
-              Each of the three takes off, and with all three off a directory is listed when
-              it is opened and at no other time.
-              These three can be set in the environment instead, as {Switches.Variable(DirectorySwitches.DepthOption)},
-              {Switches.Variable(DirectorySwitches.RequestsOption)} and {Switches.Variable(DirectorySwitches.DirectoriesOption)}.
+              Each of the four takes off, and with the first three off a directory is listed
+              when it is opened and at no other time.
+              These four can be set in the environment instead, as {Switches.Variable(DirectorySwitches.DepthOption)},
+              {Switches.Variable(DirectorySwitches.RequestsOption)}, {Switches.Variable(DirectorySwitches.DirectoriesOption)} and {Switches.Variable(DirectorySwitches.ProbesOption)}.
 
             Accounts:
               'account add' writes the account down and keeps its password apart from it,
