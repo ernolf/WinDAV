@@ -367,6 +367,77 @@ public sealed class DirectoryCacheTests
     }
 
     [Fact]
+    public async Task AnAbsentNameIsCountedWithTheListingsItBought()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/photos", "v2");
+        store.AddDirectory("/films", "v3");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings { Depth = 0, Probes = 2 });
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/photos/.git", TestContext.Current.CancellationToken));
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/films/.git", TestContext.Current.CancellationToken));
+
+        // Counted per name and not per path: three directories, one entry. The third answer
+        // bought nothing, because the second directory burned the name.
+        AbsentName absent = Assert.Single(cache.Absences());
+
+        Assert.Equal(".git", absent.Name);
+        Assert.Equal(3, absent.Asked);
+        Assert.Equal(2, absent.Listings);
+    }
+
+    [Fact]
+    public async Task ANameAnsweredFromAListingThatIsHeldBuysNothing()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings { Depth = 0, Probes = 0 });
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/.git", TestContext.Current.CancellationToken));
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/HEAD", TestContext.Current.CancellationToken));
+
+        IReadOnlyList<AbsentName> absences = cache.Absences();
+
+        // The dearest first, which is the one that paid for the listing the other was
+        // answered out of.
+        Assert.Equal(2, absences.Count);
+        Assert.Equal(".git", absences[0].Name);
+        Assert.Equal(1, absences[0].Listings);
+        Assert.Equal("HEAD", absences[1].Name);
+        Assert.Equal(0, absences[1].Listings);
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ANameThatIsThereIsNotCounted()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/track.mp3");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.GetAsync("/music/track.mp3", TestContext.Current.CancellationToken);
+
+        Assert.Empty(cache.Absences());
+    }
+
+    [Fact]
     public async Task TheRootHasNoDirectoryAroundItAndIsAskedAbout()
     {
         TreeStore store = new();
