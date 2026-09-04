@@ -33,8 +33,14 @@ public sealed class ProviderMount : IDisposable
     private static readonly TimeSpan s_tickInterval = TimeSpan.FromSeconds(5);
 
     private readonly FileSystemHost _host;
+    private readonly WinDavFileSystem _fileSystem;
     private readonly MountSettings _settings;
     private readonly ILogger _log;
+
+    // What was walked, where that is counted: the file system counts who opened, and the
+    // directory cache counts the names that were nowhere. A store without one is a mount that
+    // holds no listings, and then there is nothing to count.
+    private readonly DirectoryCache? _directories;
 
     // Held while the branding is written or taken away, because the tick runs on a thread of
     // the pool and disposing is what it races with.
@@ -71,8 +77,10 @@ public sealed class ProviderMount : IDisposable
         ArgumentNullException.ThrowIfNull(settings);
 
         _settings = settings;
-        _host = new FileSystemHost(new WinDavFileSystem(provider, settings, loggerFactory, gate));
+        _fileSystem = new WinDavFileSystem(provider, settings, loggerFactory, gate);
+        _host = new FileSystemHost(_fileSystem);
         _log = loggerFactory?.CreateLogger(typeof(ProviderMount)) ?? NullLogger.Instance;
+        _directories = provider as DirectoryCache;
     }
 
     /// <summary>
@@ -166,10 +174,32 @@ public sealed class ProviderMount : IDisposable
 
         if (_mounted && _log.IsEnabled(LogLevel.Information))
         {
+            Report();
+
             _log.LogInformation("Mount {Label} at {MountPoint} is gone.", _settings.VolumeLabel, mountPoint);
         }
 
         GC.SuppressFinalize(this);
+    }
+
+    // Decision 84: written here because two of the three parts exist only inside this process
+    // and nothing outside it can ask. Logged as one argument and not as a template, because
+    // the class identifiers in it carry braces that a message template would read as holes.
+    private void Report()
+    {
+        // Asked again here and not only where this is called: the analyser reads one method
+        // at a time, and building the report is exactly the argument it warns about (CA1873).
+        if (!_log.IsEnabled(LogLevel.Information))
+        {
+            return;
+        }
+
+        _log.LogInformation(
+            "{Report}",
+            MountReport.Build(
+                _fileSystem.Opens.Snapshot(),
+                _directories?.Absences(),
+                ShellOverlays.Read()));
     }
 
     private void Tick()

@@ -92,6 +92,12 @@ public sealed class DirectoryCache : IStorageProvider
 
     private readonly ConcurrentDictionary<string, byte> _burned = new(StringComparer.Ordinal);
 
+    // What a name that is not there has cost: how often it was answered as absent, and how
+    // many listings those answers bought. Only names that turned out absent are in here, so
+    // it holds what _nowhere and _burned already hold and nothing besides.
+    private readonly ConcurrentDictionary<string, int> _asked = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, int> _bought = new(StringComparer.Ordinal);
+
     // What is on its way. A caller that finds a fetch for its path already running waits
     // on that one instead of sending the same request again; the two are apart because a
     // listing and the volume's figures are different questions about the same path.
@@ -227,7 +233,7 @@ public sealed class DirectoryCache : IStorageProvider
         {
             Nowhere(path);
 
-            throw new ProviderException(ProviderError.NotFound, $"There is nothing at '{path}'.");
+            throw Absent(path, bought: false);
         }
 
         // Nothing held settles the name, so the directory around it is listed and the answer
@@ -238,19 +244,20 @@ public sealed class DirectoryCache : IStorageProvider
         // that one is absent, and no listing is bought to say so.
         if (ParentOf(path) is string around)
         {
+            bool bought = false;
+
             if (Current(around) is not DirectoryListing listing)
             {
                 if (Burned(path))
                 {
-                    throw new ProviderException(
-                        ProviderError.NotFound,
-                        $"There is nothing at '{path}'.");
+                    throw Absent(path, bought: false);
                 }
 
                 // Listed at depth nothing: nobody opened that directory, somebody asked about
                 // one name in it, and what is read ahead belongs to a directory a person is
                 // looking at.
                 listing = await FetchAsync(around, 0, cancellationToken).ConfigureAwait(false);
+                bought = true;
             }
 
             if (Find(listing.Entries, path) is RemoteEntry entry)
@@ -260,7 +267,7 @@ public sealed class DirectoryCache : IStorageProvider
 
             Nowhere(path);
 
-            throw new ProviderException(ProviderError.NotFound, $"There is nothing at '{path}'.");
+            throw Absent(path, bought);
         }
 
         // The root, which has no directory around it to be listed instead.
@@ -378,6 +385,39 @@ public sealed class DirectoryCache : IStorageProvider
     public Task<StorageSpace> GetSpaceAsync(string path, CancellationToken cancellationToken = default) =>
         _measuring.JoinAsync(path, () => _inner.GetSpaceAsync(path, _stopping), cancellationToken);
 
+    /// <summary>
+    /// The names that were asked for on this mount and were in no directory they were asked
+    /// for in, the one that cost the most listings first.
+    /// </summary>
+    /// <returns>What is counted at this moment. A mount that is still running keeps adding.</returns>
+    public IReadOnlyList<AbsentName> Absences()
+    {
+        List<AbsentName> absent = new(_asked.Count);
+
+        foreach (KeyValuePair<string, int> name in _asked)
+        {
+            _bought.TryGetValue(name.Key, out int listings);
+
+            absent.Add(new AbsentName(name.Key, name.Value, listings));
+        }
+
+        absent.Sort(static (left, right) =>
+        {
+            int order = right.Listings.CompareTo(left.Listings);
+
+            if (order != 0)
+            {
+                return order;
+            }
+
+            order = right.Asked.CompareTo(left.Asked);
+
+            return order != 0 ? order : string.CompareOrdinal(left.Name, right.Name);
+        });
+
+        return absent;
+    }
+
     private static string? ParentOf(string path)
     {
         int slash = path.LastIndexOf('/');
@@ -461,6 +501,23 @@ public sealed class DirectoryCache : IStorageProvider
 
     private bool Burned(string path) =>
         _settings.Probes > 0 && _burned.ContainsKey(NameOf(path));
+
+    // The answer that a name is not there, and what that answer cost. A listing counts as
+    // bought only where it was fetched to give this one answer; one that was already held,
+    // and one the name was burned before, cost nothing.
+    private ProviderException Absent(string path, bool bought)
+    {
+        string name = NameOf(path);
+
+        _asked.AddOrUpdate(name, 1, static (_, asked) => asked + 1);
+
+        if (bought)
+        {
+            _bought.AddOrUpdate(name, 1, static (_, listings) => listings + 1);
+        }
+
+        return new ProviderException(ProviderError.NotFound, $"There is nothing at '{path}'.");
+    }
 
     // One more directory a name was not in, and the name is burned once there are enough of
     // them. Only where a name was absent is counted; one that was found is not counted at all.

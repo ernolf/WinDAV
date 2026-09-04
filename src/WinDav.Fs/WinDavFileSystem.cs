@@ -72,6 +72,10 @@ public sealed class WinDavFileSystem : FileSystemBase
     private static readonly long s_fileTimeEpochTicks =
         new DateTime(1601, 1, 1, 0, 0, 0, DateTimeKind.Utc).Ticks;
 
+    // Cleared the first time WinFsp's native library turns out not to be there, so that
+    // finding it out is paid for once and not on every open.
+    private static bool s_winFspAnswers = true;
+
     private readonly IStorageProvider _provider;
     private readonly MountSettings _settings;
     private readonly ILogger _log;
@@ -119,6 +123,17 @@ public sealed class WinDavFileSystem : FileSystemBase
         _security = new byte[descriptor.BinaryLength];
         descriptor.GetBinaryForm(_security, 0);
     }
+
+    /// <summary>
+    /// Gets who opened something on this mount, counted per process.
+    /// </summary>
+    /// <remarks>
+    /// Filled from <see cref="Open"/>, where WinFsp names the process that asked. Read when
+    /// the mount comes down, for the report
+    /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#84-the-mount-says-who-walked-it-and-what-the-shell-has-registered">decision 84</see>
+    /// has it write.
+    /// </remarks>
+    public OpenTally Opens { get; } = new();
 
     // Runs inside the mount, before WinFsp has built anything, and is the only place the
     // host may be configured.
@@ -281,6 +296,14 @@ public sealed class WinDavFileSystem : FileSystemBase
 
             fileDesc = new OpenEntry(path, entry, _reads.Open(path, entry.Length));
             fileInfo = ToFileInfo(entry);
+
+            // Decision 84: here and nowhere else. WinFsp has an originating process during
+            // Open and only where the target exists, so this is the one place on the walking
+            // path where the question "who is doing this" has an answer at all.
+            Opens.Note(
+                ProcessId(),
+                entry.IsDirectory,
+                Stopwatch.GetElapsedTime(started));
 
             if (_log.IsEnabled(LogLevel.Debug))
             {
@@ -644,6 +667,37 @@ public sealed class WinDavFileSystem : FileSystemBase
     // binding is built for: the alternative would be an asynchronous file system that WinFsp
     // has no way to call.
     private static TResult Await<TResult>(Task<TResult> task) => task.GetAwaiter().GetResult();
+
+    // The originating process is WinFsp's to answer, and it answers out of its native library.
+    // A file system that a mount drives always has that library, because the driver is what
+    // carried the request in. One built without a mount does not, and a report that names no
+    // process is a better answer there than a request that dies on its way out.
+    private static int ProcessId()
+    {
+        if (!s_winFspAnswers)
+        {
+            return 0;
+        }
+
+        try
+        {
+            return GetOperationProcessId();
+        }
+        catch (DllNotFoundException)
+        {
+            s_winFspAnswers = false;
+
+            return 0;
+        }
+        catch (TypeInitializationException)
+        {
+            // The library is loaded from a static constructor, and one that failed keeps
+            // failing: the runtime hands every caller after the first the same exception.
+            s_winFspAnswers = false;
+
+            return 0;
+        }
+    }
 
     private static string NormaliseRoot(string remotePath)
     {
