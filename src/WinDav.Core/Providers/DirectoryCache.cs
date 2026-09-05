@@ -79,6 +79,11 @@ namespace WinDav.Core.Providers;
 /// </remarks>
 public sealed class DirectoryCache : IStorageProvider
 {
+    // How many rounds' worth of directories may be waiting at once. Not a setting: it says
+    // how far back a reader can still turn round, which is a property of reading and not of
+    // a server, and the width of a round is already his to set.
+    private const int Rounds = 4;
+
     // Ordinal, for the reason the attribute cache is ordinal: a store that keeps case has two
     // directories where these differ.
     private readonly ConcurrentDictionary<string, Held> _listings = new(StringComparer.Ordinal);
@@ -104,7 +109,15 @@ public sealed class DirectoryCache : IStorageProvider
     private readonly InFlight<DirectoryListing> _fetching = new();
     private readonly InFlight<StorageSpace> _measuring = new();
 
-    private readonly ConcurrentQueue<Wanted> _queue = new();
+    // What is waiting to be read ahead, the newest round at the front. A round is not taken
+    // away when the next one begins: it is pushed back. Anything that walks a drive
+    // enumerates as it goes, and every enumeration begins a round, so a round that emptied
+    // the queue would leave whoever is reading with nothing read ahead exactly while he
+    // reads. What falls off is the back, which is for directories he passed rounds ago.
+    private readonly LinkedList<Wanted> _queue = new();
+
+    // Held while the queue is read or rearranged. Nothing waits on a request inside it.
+    private readonly Lock _queued = new();
 
     // Held while what is kept is rearranged. Nothing waits on a request inside it: a listing
     // has arrived by the time the lock is taken.
@@ -194,14 +207,26 @@ public sealed class DirectoryCache : IStorageProvider
     /// <inheritdoc/>
     public async Task<DirectoryListing> ListAsync(string path, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(path);
+
+        // A round belongs to the listing somebody waited for, and enumerating a directory is
+        // the one thing that begins one. It goes in front of whatever is still waiting rather
+        // than in place of it: what this round queues is where the reader is now, and what was
+        // queued before it is where he was, which is worth a request only once this round has
+        // had its own.
+        Volatile.Write(ref _budget, _settings.Requests);
+
+        // Held, so nothing is sent for it, and the level below it is queued all the same.
+        // Reading ahead runs one level ahead of the reader and not one level ahead of the
+        // wire: a directory somebody opens is one he is about to go into, whether or not the
+        // listing had to be fetched. Without this a round ends where it succeeded, because
+        // the directory it read ahead is answered from what is held and queues nothing.
         if (Current(path) is DirectoryListing current)
         {
+            Queue(current.Entries, _settings.Depth);
+
             return current;
         }
-
-        // A round belongs to the listing somebody waited for. What the round before it did
-        // not get to is not carried over: whoever it was for has moved on by now.
-        Volatile.Write(ref _budget, _settings.Requests);
 
         return await FetchAsync(path, _settings.Depth, cancellationToken).ConfigureAwait(false);
     }
@@ -217,7 +242,7 @@ public sealed class DirectoryCache : IStorageProvider
         // it still hold.
         if (_listings.ContainsKey(path))
         {
-            DirectoryListing listing = await ListAsync(path, cancellationToken).ConfigureAwait(false);
+            DirectoryListing listing = await CurrentAsync(path, cancellationToken).ConfigureAwait(false);
 
             if (listing.Self is RemoteEntry self)
             {
@@ -461,7 +486,7 @@ public sealed class DirectoryCache : IStorageProvider
                 // the burst is otherwise one request per name.
                 if (!Fresh(held))
                 {
-                    DirectoryListing listing = await ListAsync(above, cancellationToken)
+                    DirectoryListing listing = await CurrentAsync(above, cancellationToken)
                         .ConfigureAwait(false);
 
                     return Find(listing.Entries, child) is null;
@@ -549,6 +574,16 @@ public sealed class DirectoryCache : IStorageProvider
         _burned[name] = 0;
         _nowhere.TryRemove(name, out _);
     }
+
+    // The listing of a directory as it stands, fetched again where what is held has run out.
+    // No round behind it: this answers whoever is asking what a directory is rather than
+    // opening it, and anything that walks a drive asks that of every directory it passes. A
+    // round started there reads ahead of a walker instead of a reader, one level for every
+    // directory it touches, and each of those rounds arms the next.
+    private async Task<DirectoryListing> CurrentAsync(string path, CancellationToken cancellationToken) =>
+        Current(path) is DirectoryListing current
+            ? current
+            : await FetchAsync(path, 0, cancellationToken).ConfigureAwait(false);
 
     // Every fetch goes through here, the one somebody is waiting for and the one read ahead
     // alike: the two meet on a directory the reader has reached first, and one of them is a
@@ -742,11 +777,12 @@ public sealed class DirectoryCache : IStorageProvider
         // upwards the right answer here rather than the wrong one. The order is stable, so
         // equal times keep the order the server gave, and a child the store gave no time for
         // goes last rather than out: not every store fills it in.
-        foreach (RemoteEntry child in wanted.OrderByDescending(
-            directory => directory.LastModified ?? DateTimeOffset.MinValue))
-        {
-            _queue.Enqueue(new Wanted(child.Path, depth - 1));
-        }
+        Push(
+        [
+            .. wanted
+                .OrderByDescending(directory => directory.LastModified ?? DateTimeOffset.MinValue)
+                .Select(directory => new Wanted(directory.Path, depth - 1)),
+        ]);
 
         Pump();
     }
@@ -780,14 +816,14 @@ public sealed class DirectoryCache : IStorageProvider
 
             // Something may have arrived between the queue running dry and the flag going
             // down, and whoever queued it saw the flag up and started nothing.
-            again = !_queue.IsEmpty && Interlocked.CompareExchange(ref _pumping, 1, 0) == 0;
+            again = Waiting() && Interlocked.CompareExchange(ref _pumping, 1, 0) == 0;
         }
         while (again);
     }
 
     private async Task DrainAsync()
     {
-        while (!_stopping.IsCancellationRequested && _queue.TryDequeue(out Wanted wanted))
+        while (!_stopping.IsCancellationRequested && Take(out Wanted wanted))
         {
             if (Interlocked.Decrement(ref _budget) < 0)
             {
@@ -837,10 +873,63 @@ public sealed class DirectoryCache : IStorageProvider
         }
     }
 
+    // A round to the front, in the order it was sorted into.
+    private void Push(IReadOnlyList<Wanted> round)
+    {
+        lock (_queued)
+        {
+            for (int index = round.Count - 1; index >= 0; index--)
+            {
+                _queue.AddFirst(round[index]);
+            }
+
+            // Something has to fall off, or a drive being walked queues faster than the
+            // requests can be spent and the queue grows for as long as the walk lasts. The
+            // back is what falls off: a few rounds' worth is as far back as a reader can
+            // still turn round, and behind that is where he no longer is.
+            int held = _settings.Requests * Rounds;
+
+            while (_queue.Count > held)
+            {
+                _queue.RemoveLast();
+            }
+        }
+    }
+
+    private bool Waiting()
+    {
+        lock (_queued)
+        {
+            return _queue.Count > 0;
+        }
+    }
+
+    private bool Take(out Wanted wanted)
+    {
+        lock (_queued)
+        {
+            LinkedListNode<Wanted>? first = _queue.First;
+
+            if (first is null)
+            {
+                wanted = default;
+
+                return false;
+            }
+
+            _queue.RemoveFirst();
+
+            wanted = first.Value;
+
+            return true;
+        }
+    }
+
     private void Empty()
     {
-        while (_queue.TryDequeue(out _))
+        lock (_queued)
         {
+            _queue.Clear();
         }
     }
 
