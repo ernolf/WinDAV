@@ -79,11 +79,6 @@ namespace WinDav.Core.Providers;
 /// </remarks>
 public sealed class DirectoryCache : IStorageProvider
 {
-    // How many rounds' worth of directories may be waiting at once. Not a setting: it says
-    // how far back a reader can still turn round, which is a property of reading and not of
-    // a server, and the width of a round is already his to set.
-    private const int Rounds = 4;
-
     // Ordinal, for the reason the attribute cache is ordinal: a store that keeps case has two
     // directories where these differ.
     private readonly ConcurrentDictionary<string, Held> _listings = new(StringComparer.Ordinal);
@@ -109,11 +104,11 @@ public sealed class DirectoryCache : IStorageProvider
     private readonly InFlight<DirectoryListing> _fetching = new();
     private readonly InFlight<StorageSpace> _measuring = new();
 
-    // What is waiting to be read ahead, the newest round at the front. A round is not taken
-    // away when the next one begins: it is pushed back. Anything that walks a drive
-    // enumerates as it goes, and every enumeration begins a round, so a round that emptied
-    // the queue would leave whoever is reading with nothing read ahead exactly while he
-    // reads. What falls off is the back, which is for directories he passed rounds ago.
+    // What is waiting to be read ahead. Only a directory somebody is standing in begins a
+    // round, so a round is the reader's and the one before it was his too: opening another
+    // directory takes the place of what was queued for the one he left behind. Inside a
+    // round the newest level goes to the front, so going one level deeper is served before
+    // the rest of the level it was opened from.
     private readonly LinkedList<Wanted> _queue = new();
 
     // Held while the queue is read or rearranged. Nothing waits on a request inside it.
@@ -131,6 +126,10 @@ public sealed class DirectoryCache : IStorageProvider
 
     private int _budget;
     private int _pumping;
+
+    // The directory the round that is waiting was begun in, so that a window asking about
+    // the one it shows again is not taken for somebody who has moved.
+    private string? _round;
 
     /// <summary>
     /// Initialises a new instance of the <see cref="DirectoryCache"/> class.
@@ -174,6 +173,17 @@ public sealed class DirectoryCache : IStorageProvider
     }
 
     /// <summary>
+    /// Gets what is open on each directory, which is what says whether a listing is somebody's
+    /// or a walk's.
+    /// </summary>
+    /// <remarks>
+    /// Written by the file system, where a handle is opened and closed, and read here when a
+    /// directory is listed. Nothing is entered by a caller that has no handles to speak of,
+    /// and then no listing begins a round.
+    /// </remarks>
+    public OpenDirectories Handles { get; } = new();
+
+    /// <summary>
     /// Puts a store of listings over a store, or leaves the store as it is.
     /// </summary>
     /// <param name="provider">The store the questions go to.</param>
@@ -209,12 +219,29 @@ public sealed class DirectoryCache : IStorageProvider
     {
         ArgumentNullException.ThrowIfNull(path);
 
-        // A round belongs to the listing somebody waited for, and enumerating a directory is
-        // the one thing that begins one. It goes in front of whatever is still waiting rather
-        // than in place of it: what this round queues is where the reader is now, and what was
-        // queued before it is where he was, which is worth a request only once this round has
-        // had its own.
-        Volatile.Write(ref _budget, _settings.Requests);
+        // A round belongs to somebody who is standing in the directory, and what says so is
+        // a handle besides the one this listing is being read through. A program walking the
+        // tree opens a directory, lists it and closes it, and a round started for it reads
+        // ahead of the walk rather than of anybody: one round per directory it passes, each
+        // arming the next, to the last branch of the tree. Below the threshold the listing is
+        // answered and nothing is queued.
+        bool reading = Handles.Count(path) > 1;
+        int depth = reading ? _settings.Depth : 0;
+
+        if (reading)
+        {
+            // Where he was is not worth a request any more, and the requests it would spend
+            // are the ones this round needs. Two that are already on the wire still land:
+            // that is the gate, and it is two. The same directory again is the same round
+            // and is left alone: a window asks about the one it shows every few seconds, and
+            // a level below it that is waiting cannot be queued again from where he stands.
+            if (!string.Equals(Interlocked.Exchange(ref _round, path), path, StringComparison.Ordinal))
+            {
+                Empty();
+            }
+
+            Volatile.Write(ref _budget, _settings.Requests);
+        }
 
         // Held, so nothing is sent for it, and the level below it is queued all the same.
         // Reading ahead runs one level ahead of the reader and not one level ahead of the
@@ -223,12 +250,12 @@ public sealed class DirectoryCache : IStorageProvider
         // the directory it read ahead is answered from what is held and queues nothing.
         if (Current(path) is DirectoryListing current)
         {
-            Queue(current.Entries, _settings.Depth);
+            Queue(current.Entries, depth);
 
             return current;
         }
 
-        return await FetchAsync(path, _settings.Depth, cancellationToken).ConfigureAwait(false);
+        return await FetchAsync(path, depth, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -883,13 +910,11 @@ public sealed class DirectoryCache : IStorageProvider
                 _queue.AddFirst(round[index]);
             }
 
-            // Something has to fall off, or a drive being walked queues faster than the
-            // requests can be spent and the queue grows for as long as the walk lasts. The
-            // back is what falls off: a few rounds' worth is as far back as a reader can
-            // still turn round, and behind that is where he no longer is.
-            int held = _settings.Requests * Rounds;
-
-            while (_queue.Count > held)
+            // What is behind the round's budget is never reached, because the budget is
+            // what the whole round may spend and every level of it queues into the same
+            // list. Dropping it keeps a directory of thousands from filling the queue with
+            // entries no request will ever be left for.
+            while (_queue.Count > _settings.Requests)
             {
                 _queue.RemoveLast();
             }
