@@ -295,7 +295,8 @@ internal static class Program
             Listing:
               Listing a directory costs one request, whether it holds three entries or three
               hundred. So a mount that has listed one goes on to list the directories in it
-              while nobody is waiting, and opening one of those finds it already there.
+              while nobody is waiting, and opening one of those finds it already there. Only
+              for a directory somebody has open: a program walking the drive gets none of it.
               --list-ahead is how many levels below an open directory that goes.
               --list-ahead-requests is the ceiling on one round of it, counted in requests
               rather than in entries, and what a round does not get to is dropped rather than
