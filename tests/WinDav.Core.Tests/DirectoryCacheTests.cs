@@ -635,6 +635,130 @@ public sealed class DirectoryCacheTests
     }
 
     [Fact]
+    public async Task ADirectoryThatWasReadAheadReadsAheadWhenItIsOpened()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddDirectory("/music/live/2026", "v3");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings());
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await WaitFor(store, 2);
+        await Task.Delay(s_brief, TestContext.Current.CancellationToken);
+
+        // Answered out of what the round before it fetched, and the level below it fetched
+        // all the same. A round that ended where it succeeded left the reader with nothing
+        // ahead of him from the first directory it had reached.
+        await cache.ListAsync("/music/live", TestContext.Current.CancellationToken);
+
+        await WaitFor(store, 3);
+
+        Assert.Equal<string>(["/music", "/music/live", "/music/live/2026"], store.Listed.Order());
+    }
+
+    [Fact]
+    public async Task AskingWhatADirectoryIsReadsNothingAhead()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddDirectory("/music/live/2026", "v3");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings());
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await WaitFor(store, 2);
+        await Task.Delay(s_brief, TestContext.Current.CancellationToken);
+
+        RemoteEntry self = await cache.GetAsync("/music/live", TestContext.Current.CancellationToken);
+
+        await Task.Delay(s_brief, TestContext.Current.CancellationToken);
+
+        // Anything that walks a drive asks what a directory is for every directory it passes,
+        // and it asks that of the ones read ahead as well. A round started there would read
+        // ahead of the walker rather than of the reader, and every round it started would arm
+        // the next one, down to the last branch of the tree.
+        Assert.Equal("/music/live", self.Path);
+        Assert.Equal<string>(["/music", "/music/live"], store.Listed.Order());
+    }
+
+    [Fact]
+    public async Task ANewRoundGoesInFrontOfTheOneBeforeIt()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/a", "v1");
+        store.AddDirectory("/a/one", "v2");
+        store.AddDirectory("/a/two", "v3");
+        store.AddDirectory("/b", "v4");
+        store.AddDirectory("/b/one", "v5");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings());
+
+        // The round stops on its first directory, so the second is still waiting when the
+        // next directory is opened.
+        store.Hold("/a/one");
+
+        await cache.ListAsync("/a", TestContext.Current.CancellationToken);
+
+        await WaitFor(store, 2);
+
+        await cache.ListAsync("/b", TestContext.Current.CancellationToken);
+
+        store.Release();
+
+        await WaitFor(store, 5);
+        await Task.Delay(s_brief, TestContext.Current.CancellationToken);
+
+        // Somebody who opens another directory is there now, so that is where the next
+        // request goes. What was queued where he was keeps its place behind it rather than
+        // being thrown away: anything that walks a drive opens directories as it goes, and a
+        // round that emptied the queue would let a walk take his away from him.
+        Assert.Equal<string>(["/a", "/a/one", "/b", "/b/one", "/a/two"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ARoundReachesItsSecondLevelBeforeTheRestOfItsFirst()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/a", "v1");
+        store.AddDirectory("/a/one", "v2");
+        store.AddDirectory("/a/one/deep", "v3");
+        store.AddDirectory("/a/two", "v4");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings { Depth = 2 });
+
+        // The round stops on the first of the two, so the other is still queued when the one
+        // it stopped on is opened.
+        store.Hold("/a/one");
+
+        await cache.ListAsync("/a", TestContext.Current.CancellationToken);
+
+        await WaitFor(store, 2);
+
+        Task<DirectoryListing> opened = cache.ListAsync("/a/one", TestContext.Current.CancellationToken);
+
+        store.Release();
+
+        await opened.ConfigureAwait(true);
+
+        await WaitFor(store, 4);
+        await Task.Delay(s_brief, TestContext.Current.CancellationToken);
+
+        // He went into the first one, so what is below it is where he is, and it goes in
+        // front of the rest of the level he left. A second level is always behind a whole
+        // first one, so a round that emptied its queue would never reach one at all.
+        Assert.Equal<string>(["/a", "/a/one", "/a/one/deep", "/a/two"], store.Listed);
+    }
+
+    [Fact]
     public async Task ARoundGoesNoFurtherThanItsCeiling()
     {
         TreeStore store = new();
