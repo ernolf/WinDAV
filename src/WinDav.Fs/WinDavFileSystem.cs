@@ -77,6 +77,11 @@ public sealed class WinDavFileSystem : FileSystemBase
     private static bool s_winFspAnswers = true;
 
     private readonly IStorageProvider _provider;
+
+    // The store of listings, where the handles open on a directory are counted. Null where
+    // the mount holds no listings, and then there is nothing that would read the count.
+    private readonly DirectoryCache? _directories;
+
     private readonly MountSettings _settings;
     private readonly ILogger _log;
     private readonly ReadLayer _reads;
@@ -113,6 +118,7 @@ public sealed class WinDavFileSystem : FileSystemBase
         ArgumentNullException.ThrowIfNull(settings);
 
         _provider = provider;
+        _directories = provider as DirectoryCache;
         _settings = settings;
         _log = loggerFactory?.CreateLogger(typeof(WinDavFileSystem)) ?? NullLogger.Instance;
         _reads = new ReadLayer(provider, settings.Read, _log, recovery: null, gate);
@@ -310,6 +316,15 @@ public sealed class WinDavFileSystem : FileSystemBase
                 _log.LogDebug("Opened {Path} in {Elapsed} ms.", path, Elapsed(started));
             }
 
+            // Counted where the open has succeeded, because that is where the handle begins
+            // to exist: WinFsp closes what it was given a success for and nothing else. What
+            // reads the count is the store of listings, which reads ahead of a directory
+            // somebody is standing in and not of one a walk is passing through.
+            if (entry.IsDirectory)
+            {
+                _directories?.Handles.Enter(path);
+            }
+
             return STATUS_SUCCESS;
         }
         catch (ProviderException exception)
@@ -427,15 +442,21 @@ public sealed class WinDavFileSystem : FileSystemBase
         }
     }
 
-    // The end of one handle, and the only reason this is here: the window it read through
-    // belongs to the mount's ceiling and has to go back, whether the file was read to the end
-    // or dropped after a kilobyte. Nothing else of ours outlives an open.
+    // The end of one handle. The window it read through belongs to the mount's ceiling and
+    // has to go back, whether the file was read to the end or dropped after a kilobyte; a
+    // directory is held by one handle fewer, which is what says whether anybody is still
+    // standing in it. Nothing else of ours outlives an open.
     /// <inheritdoc/>
     public override void Close(object? fileNode, object fileDesc)
     {
         if (fileDesc is OpenEntry open)
         {
             open.Window.Close();
+
+            if (open.Entry.IsDirectory)
+            {
+                _directories?.Handles.Leave(open.Path);
+            }
         }
     }
 
@@ -471,6 +492,11 @@ public sealed class WinDavFileSystem : FileSystemBase
         {
             long started = Stopwatch.GetTimestamp();
 
+            // Read before the listing, so that what is written down is the number the store
+            // of listings saw when it decided whether to read ahead. Nothing else on record
+            // says whether a reader holds a directory more than once at a time.
+            int handles = _directories?.Handles.Count(open.Path) ?? 0;
+
             // What is counted is what was fetched, which for an enumeration that was resumed
             // is what is left after the marker rather than the whole directory.
             List<RemoteEntry> children = ChildrenOf(open.Path, marker);
@@ -478,10 +504,11 @@ public sealed class WinDavFileSystem : FileSystemBase
             if (_log.IsEnabled(LogLevel.Debug))
             {
                 _log.LogDebug(
-                    "Listed {Count} entries of {Path} in {Elapsed} ms.",
+                    "Listed {Count} entries of {Path} in {Elapsed} ms, held by {Handles}.",
                     children.Count,
                     open.Path,
-                    Elapsed(started));
+                    Elapsed(started),
+                    handles);
             }
 
             scan = new DirectoryScan(children);
