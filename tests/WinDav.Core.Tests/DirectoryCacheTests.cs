@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using WinDav.Abstractions;
 using WinDav.Core.Providers;
@@ -980,6 +981,365 @@ public sealed class DirectoryCacheTests
         Assert.Equal(2, store.Listed.Count);
     }
 
+    // What a round is written down as. On the wire a listing read ahead and a listing somebody
+    // waited for are the same PROPFIND, so which round a request belongs to and where that
+    // round ended is said here or nowhere.
+    [Fact]
+    public async Task ARoundSaysWhatItQueuedAndWhereItEnded()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddDirectory("/music/tape", "v3");
+
+        Recorder log = new();
+        DirectoryCache cache = Cache(store, new DirectorySettings { Requests = 8 }, log: log);
+
+        await Open(cache, "/music");
+
+        await WaitFor(store, 3);
+        await WaitFor(() => log.Written().Contains("Stopped reading ahead of /music:", StringComparison.Ordinal));
+
+        Assert.Contains(
+            "Reading ahead of /music: 2 of 2 children queued at depth 1, budget 8.",
+            log.Written(),
+            StringComparison.Ordinal);
+
+        Assert.Contains("Read ahead /music/live at depth 0 in ", log.Written(), StringComparison.Ordinal);
+        Assert.Contains("Read ahead /music/tape at depth 0 in ", log.Written(), StringComparison.Ordinal);
+
+        Assert.Contains(
+            "Stopped reading ahead of /music: empty, 0 in the queue.",
+            log.Written(),
+            StringComparison.Ordinal);
+    }
+
+    // A window asks about the directory it is showing every few seconds, and the round that
+    // was begun for it is still the same round. What the second look queues is written down
+    // as what it is: an opening line for every look reads as a round that ran twice, and only
+    // one of the two ever ends.
+    [Fact]
+    public async Task ARoundTheReaderStaysInIsFilledUpRatherThanBegunAgain()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddDirectory("/music/tape", "v3");
+
+        Recorder log = new();
+        DirectoryCache cache = Cache(store, new DirectorySettings(), log: log);
+
+        // The round stalls on its first child, so it is still running when the directory is
+        // listed the second time.
+        store.Hold("/music/live");
+
+        await Open(cache, "/music");
+
+        await WaitFor(store, 2);
+
+        await Open(cache, "/music");
+
+        Assert.Contains(
+            "Reading further ahead of /music: 2 of 2 children queued at depth 1, budget 32.",
+            log.Written(),
+            StringComparison.Ordinal);
+
+        Assert.Single(
+            log.Written().Split('\n'),
+            line => line.StartsWith("Reading ahead of /music:", StringComparison.Ordinal));
+
+        store.Release();
+    }
+
+    [Fact]
+    public async Task ARoundThatIsDroppedSaysWhatWasLeftOfIt()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddDirectory("/music/tape", "v3");
+        store.AddDirectory("/films", "v4");
+
+        Recorder log = new();
+        DirectoryCache cache = Cache(store, new DirectorySettings(), log: log);
+
+        // The round stalls on its first child, so its second is still waiting when the reader
+        // opens something else and the round is given up.
+        store.Hold("/music/live");
+
+        await Open(cache, "/music");
+
+        await WaitFor(store, 2);
+
+        await Open(cache, "/films");
+
+        Assert.Contains(
+            "Stopped reading ahead of /music: dropped, 1 in the queue.",
+            log.Written(),
+            StringComparison.Ordinal);
+
+        store.Release();
+    }
+
+    // A round whose queue has run dry while its last child is on the wire is still a round the
+    // reader can leave, and leaving it is what ends it. Ended by what is waiting rather than by
+    // what was written down, it stays open, and the next end that is written is given to it.
+    [Fact]
+    public async Task ARoundGivenUpWithNothingWaitingEndsWhereItWasBegun()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddDirectory("/films", "v3");
+
+        Recorder log = new();
+        DirectoryCache cache = Cache(store, new DirectorySettings(), log: log);
+
+        // One child, and it is on the wire: the queue behind it is empty when he moves.
+        store.Hold("/music/live");
+
+        await Open(cache, "/music");
+
+        await WaitFor(store, 2);
+
+        await Open(cache, "/films");
+
+        Assert.Contains(
+            "Stopped reading ahead of /music: dropped, 0 in the queue.",
+            log.Written(),
+            StringComparison.Ordinal);
+
+        store.Release();
+    }
+
+    // The directory somebody moves into may have nothing to queue, and a round that was never
+    // begun cannot end. The loop of the round before it runs dry a moment later, and its end
+    // belongs to the directory that round was begun in and not to where he stands by then.
+    [Fact]
+    public async Task ADirectoryThatQueuesNothingIsGivenNoEnd()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddDirectory("/films", "v3");
+        store.AddDirectory("/shows", "v4");
+        store.AddDirectory("/shows/late", "v5");
+
+        Recorder log = new();
+        DirectoryCache cache = Cache(store, new DirectorySettings(), log: log);
+
+        store.Hold("/music/live");
+
+        await Open(cache, "/music");
+
+        await WaitFor(store, 2);
+
+        await Open(cache, "/films");
+
+        store.Release();
+
+        await WaitFor(() => log.Written().Contains("Read ahead /music/live", StringComparison.Ordinal));
+
+        // A round that ends after the empty queue of the one before it, so that what is
+        // missing above is missing because it was never written and not because nothing has
+        // run yet.
+        await Open(cache, "/shows");
+
+        await WaitFor(() => log.Written().Contains(
+            "Stopped reading ahead of /shows: empty,",
+            StringComparison.Ordinal));
+
+        Assert.DoesNotContain(
+            "Stopped reading ahead of /films",
+            log.Written(),
+            StringComparison.Ordinal);
+    }
+
+    // The ordinary way a round is not the first one: a directory with more children than a
+    // round may spend requests on is left half read, and the reader who goes into it again
+    // pays for the rest. Without the wording that says so, the log shows a round of the same
+    // directory over and over and nothing that tells them apart.
+    [Fact]
+    public async Task ADirectoryAnEarlierRoundLeftPartOfIsReadFurtherAhead()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddDirectory("/music/tape", "v3");
+        store.AddDirectory("/films", "v4");
+        store.AddDirectory("/films/one", "v5");
+
+        Recorder log = new();
+
+        // One request a round, so the first round over the two children reaches one of them.
+        DirectoryCache cache = Cache(store, new DirectorySettings { Requests = 1 }, log: log);
+
+        await Open(cache, "/music");
+
+        await WaitFor(() => log.Written().Contains(
+            "Stopped reading ahead of /music: empty,",
+            StringComparison.Ordinal));
+
+        // Away and back, so that what he comes back to is a round of its own rather than the
+        // one he was in.
+        await Open(cache, "/films");
+
+        await Open(cache, "/music");
+
+        Assert.Contains(
+            "Reading further ahead of /music: 1 of 2 children queued at depth 1, budget 1.",
+            log.Written(),
+            StringComparison.Ordinal);
+    }
+
+    // The reader stands where everything below him is already held, which is what a round
+    // that has done its work leaves behind and what a prefetch that has stopped working
+    // leaves behind too. Without a line the two are the same silence.
+    [Fact]
+    public async Task ALookWithNothingToQueueSaysSo()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddFile("/music/cover.jpg");
+
+        Recorder log = new();
+        DirectoryCache cache = Cache(store, new DirectorySettings(), log: log);
+
+        await Open(cache, "/music");
+
+        await WaitFor(() => log.Written().Contains(
+            "Stopped reading ahead of /music: empty,",
+            StringComparison.Ordinal));
+
+        // The same directory again, as a window asking about the one it shows: the child is
+        // held by now and the other entry is a file, so there is nothing left to queue.
+        await Open(cache, "/music");
+
+        Assert.Contains(
+            "Nothing to read ahead of /music: its 2 children are files or held.",
+            log.Written(),
+            StringComparison.Ordinal);
+    }
+
+    // A level the round queued for itself is not a directory anybody is looking at, and one
+    // of those with nothing below it would write a line behind every child of every round.
+    [Fact]
+    public async Task ALevelBelowTheReaderThatQueuesNothingSaysNothing()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddFile("/music/live/one.mp3");
+
+        Recorder log = new();
+        DirectoryCache cache = Cache(store, new DirectorySettings { Depth = 2 }, log: log);
+
+        await Open(cache, "/music");
+
+        await WaitFor(() => log.Written().Contains("Read ahead /music/live", StringComparison.Ordinal));
+
+        Assert.DoesNotContain(
+            "Nothing to read ahead of /music/live",
+            log.Written(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AChildFetchedWhileTheRoundWaitedIsWrittenDownAsSkipped()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddDirectory("/music/tape", "v3");
+
+        Recorder log = new();
+        DirectoryCache cache = Cache(store, new DirectorySettings(), log: log);
+
+        store.Hold("/music/live");
+
+        await Open(cache, "/music");
+
+        await WaitFor(store, 2);
+
+        // Asked for while the round is still on the first child. It is held by the time the
+        // round reaches it, and the round sends nothing for it: the one end of a round that
+        // costs nothing, which without this line looks like a round that never ran.
+        await cache.ListAsync("/music/tape", TestContext.Current.CancellationToken);
+
+        store.Release();
+
+        await WaitFor(() => log.Written().Contains("Skipped /music/tape: held.", StringComparison.Ordinal));
+
+        Assert.Contains("Skipped /music/tape: held.", log.Written(), StringComparison.Ordinal);
+        Assert.Equal<string>(["/music", "/music/live", "/music/tape"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ARoundThatWasRefusedSaysWhatItGaveUp()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+
+        for (int number = 0; number < 10; number++)
+        {
+            store.AddDirectory($"/music/{number}", $"v{number}");
+        }
+
+        store.RefuseBelow("/music");
+
+        Recorder log = new();
+        DirectoryCache cache = Cache(store, new DirectorySettings(), log: log);
+
+        await Open(cache, "/music");
+
+        await WaitFor(() => log.Written().Contains("Stopped reading ahead of /music:", StringComparison.Ordinal));
+
+        // The nine that were never asked for are what the refusal saved, and a log that ends
+        // at the refusal says nothing about them.
+        Assert.Contains(
+            "Stopped reading ahead of /music: busy, 9 in the queue.",
+            log.Written(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ARoundThatHasSpentItsBudgetSaysSo()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddDirectory("/music/tape", "v3");
+        store.AddDirectory("/music/live/one", "v4");
+        store.AddDirectory("/music/live/two", "v5");
+
+        Recorder log = new();
+
+        // Two levels into three requests' worth of directories at two requests a round: the
+        // second level queues past what the budget can pay for.
+        DirectoryCache cache = Cache(store, new DirectorySettings { Depth = 2, Requests = 2 }, log: log);
+
+        await Open(cache, "/music");
+
+        await WaitFor(() => log.Written().Contains("Stopped reading ahead of /music:", StringComparison.Ordinal));
+
+        Assert.Contains(
+            "Stopped reading ahead of /music: spent, 0 in the queue.",
+            log.Written(),
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task WritingThrowsAwayTheListingOfTheDirectoryWrittenIn()
     {
@@ -1062,14 +1422,14 @@ public sealed class DirectoryCacheTests
                 s_ample,
                 new DirectorySettings { Directories = 0 },
                 Gate(),
-                TestContext.Current.CancellationToken));
+                stopping: TestContext.Current.CancellationToken));
 
         Assert.Same(store, DirectoryCache.Over(
                 store,
                 TimeSpan.Zero,
                 new DirectorySettings(),
                 Gate(),
-                TestContext.Current.CancellationToken));
+                stopping: TestContext.Current.CancellationToken));
     }
 
     // A cache that holds but never lists ahead, which is what a test about the holding wants.
@@ -1189,8 +1549,12 @@ public sealed class DirectoryCacheTests
 
     private static RequestGate Gate() => new(2, NullLogger.Instance);
 
-    private static DirectoryCache Cache(TreeStore store, DirectorySettings settings, TimeSpan? lifetime = null) =>
-        new(store, lifetime ?? s_ample, settings, Gate());
+    private static DirectoryCache Cache(
+        TreeStore store,
+        DirectorySettings settings,
+        TimeSpan? lifetime = null,
+        ILogger? log = null) =>
+        new(store, lifetime ?? s_ample, settings, Gate(), log: log);
 
     // A directory somebody is standing in: two handles at once, which is what a window that
     // keeps a directory open while it shows it produces and what a walk passing through does
@@ -1217,6 +1581,47 @@ public sealed class DirectoryCacheTests
         while (!until() && Environment.TickCount64 < deadline)
         {
             await Task.Delay(5, TestContext.Current.CancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    // What the store says about a round, which is written at a level nothing is on by
+    // default. Read while the round is still running, so what comes back is a copy.
+    private sealed class Recorder : ILogger
+    {
+        private readonly List<string> _lines = [];
+        private readonly Lock _sync = new();
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Debug;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            ArgumentNullException.ThrowIfNull(formatter);
+
+            if (!IsEnabled(logLevel))
+            {
+                return;
+            }
+
+            lock (_sync)
+            {
+                _lines.Add(formatter(state, exception));
+            }
+        }
+
+        internal string Written()
+        {
+            lock (_sync)
+            {
+                return string.Join('\n', _lines);
+            }
         }
     }
 

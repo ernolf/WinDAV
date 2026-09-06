@@ -125,7 +125,15 @@ internal static class MountCommand
             // hands back unasked is one nobody paid a request for, and what it says about
             // every entry in it is what the layer below would have been told anyway. The same
             // lifetime: it is the same request that vouches for both.
-            provider = DirectoryCache.Over(provider, attributes, directories, gate, cancellationToken);
+            // Written down where the store writes: a round belongs to the layer that begins
+            // it, and the area follows from the namespace it is begun in.
+            provider = DirectoryCache.Over(
+                provider,
+                attributes,
+                directories,
+                gate,
+                logging.CreateLogger<DirectoryCache>(),
+                cancellationToken);
 
             // One request before the drive appears, so that a wrong credential or a path that
             // is not there is a sentence here instead of an error in every window afterwards.
