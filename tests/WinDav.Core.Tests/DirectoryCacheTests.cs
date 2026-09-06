@@ -21,6 +21,13 @@ public sealed class DirectoryCacheTests
     // Long enough that nothing runs out while a test is about something else.
     private static readonly TimeSpan s_ample = TimeSpan.FromMinutes(5);
 
+    // A lifetime with room on both sides of its half, for the tests about the renewal: a
+    // wait past the half has as much of the lifetime left over as a brief one has room.
+    private static readonly TimeSpan s_life = TimeSpan.FromSeconds(1);
+
+    // Past half of that lifetime and well inside the whole of it.
+    private static readonly TimeSpan s_halfway = TimeSpan.FromMilliseconds(600);
+
     // How long a test waits for what happens behind whoever asked. Never reached when the
     // work is done, and it is done in microseconds against a store that is a dictionary.
     private static readonly TimeSpan s_patience = TimeSpan.FromSeconds(10);
@@ -60,6 +67,120 @@ public sealed class DirectoryCacheTests
         await cache.ListAsync("/music", TestContext.Current.CancellationToken);
 
         Assert.Equal<string>(["/music", "/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task AListingPastHalfItsLifeIsFetchedAgainBehindTheAnswer()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+
+        DirectoryCache cache = Cache(store, Off, s_life);
+
+        DirectoryListing first = await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await Task.Delay(s_halfway, TestContext.Current.CancellationToken);
+
+        DirectoryListing again = await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        // Answered out of what is held. What the answer sets off is nobody's to wait for,
+        // and by the question after it the listing is fresh again.
+        Assert.Same(first.Entries, again.Entries);
+
+        await WaitFor(store, 2);
+
+        Assert.Equal<string>(["/music", "/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task AListingInsideHalfItsLifeIsLeftAlone()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+
+        DirectoryCache cache = Cache(store, Off, s_life);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await Task.Delay(s_brief, TestContext.Current.CancellationToken);
+
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ADirectoryNobodyAsksAboutIsNotRenewed()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+
+        DirectoryCache cache = Cache(store, Off, s_life);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        // Past the whole lifetime rather than half of it: what arms a renewal is an answer,
+        // so a mount nobody looks at sends nothing at all.
+        await Task.Delay(s_life + s_brief, TestContext.Current.CancellationToken);
+
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ANameAnsweredOutOfWhatIsHeldRenewsTheListing()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+
+        DirectoryCache cache = Cache(store, Off, s_life);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await Task.Delay(s_halfway, TestContext.Current.CancellationToken);
+
+        // A name that is not in the listing is answered out of it, which is an answer like
+        // any other and arms the renewal like any other.
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/nothing", TestContext.Current.CancellationToken));
+
+        await WaitFor(store, 2);
+
+        Assert.Equal<string>(["/music", "/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ARenewalOnItsWayIsNotSentAgain()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+
+        DirectoryCache cache = Cache(store, Off, s_life);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await Task.Delay(s_halfway, TestContext.Current.CancellationToken);
+
+        // The renewal is held on the wire, which is the window every answer after it falls
+        // into: what is held still answers, and none of those answers sends a second one.
+        store.Hold("/music");
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await WaitFor(store, 2);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await Task.Delay(s_brief, TestContext.Current.CancellationToken);
+
+        int listed = store.Listed.Count;
+
+        store.Release();
+
+        Assert.Equal(2, listed);
     }
 
     [Fact]
