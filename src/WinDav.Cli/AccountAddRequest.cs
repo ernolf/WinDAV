@@ -110,7 +110,7 @@ internal sealed class AccountAddRequest
         {
             Provider = provider,
             Server = server,
-            Id = line.Value("--id"),
+            Id = line.Value("--id") is { } id ? AccountName.Ensure(id) : null,
             LoginId = loginId,
             Anonymous = anonymous,
         };
