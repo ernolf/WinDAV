@@ -79,6 +79,14 @@ namespace WinDav.Core.Providers;
 /// among them, which is
 /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#79-a-request-that-is-already-in-flight-is-waited-for-instead-of-sent-again">decision 79</see>.
 /// </para>
+/// <para>
+/// A listing that is past half its life is fetched again behind the answer it just gave.
+/// Nobody waits for that round trip: the answer came out of what is held, and by the time
+/// the next question arrives the listing has been renewed. This renews early and never
+/// extends what is believed, so nothing is ever answered out of a listing older than its
+/// lifetime. A directory nobody asks about is renewed never, and a renewal takes the gate
+/// as a request nobody is waiting for.
+/// </para>
 /// </remarks>
 public sealed class DirectoryCache : IStorageProvider
 {
@@ -111,6 +119,11 @@ public sealed class DirectoryCache : IStorageProvider
     private readonly InFlight<DirectoryListing> _fetching = new();
     private readonly InFlight<StorageSpace> _measuring = new();
 
+    // What is being fetched again behind an answer. The guard is this layer's own rather
+    // than the one above: a renewal stands at the gate before it joins, and it is on its
+    // way for as long as it stands there.
+    private readonly ConcurrentDictionary<string, byte> _renewing = new(StringComparer.Ordinal);
+
     // What is waiting to be read ahead. Only a directory somebody is standing in begins a
     // round, so a round is the reader's and the one before it was his too: opening another
     // directory takes the place of what was queued for the one he left behind. Inside a
@@ -127,6 +140,10 @@ public sealed class DirectoryCache : IStorageProvider
 
     private readonly IStorageProvider _inner;
     private readonly TimeSpan _lifetime;
+
+    // When a listing is worth fetching again: past half its life, so that what is held is
+    // renewed before the question that would otherwise pay for it arrives.
+    private readonly TimeSpan _renewal;
     private readonly DirectorySettings _settings;
     private readonly RequestGate _gate;
     private readonly ILogger _log;
@@ -187,6 +204,7 @@ public sealed class DirectoryCache : IStorageProvider
 
         _inner = inner;
         _lifetime = lifetime;
+        _renewal = lifetime / 2;
         _settings = settings ?? new DirectorySettings();
         _gate = gate;
         _log = log ?? NullLogger.Instance;
@@ -550,6 +568,11 @@ public sealed class DirectoryCache : IStorageProvider
                     return Find(listing.Entries, child) is null;
                 }
 
+                // Read out of what is held, which is an answer like any other and arms
+                // the renewal like any other: this reads the listing rather than asking
+                // for it, so nothing else here would.
+                Renew(above, held);
+
                 return Find(held.Entries, child) is null;
             }
 
@@ -572,11 +595,88 @@ public sealed class DirectoryCache : IStorageProvider
 
     private bool Fresh(Held held) => Stopwatch.GetElapsedTime(held.Stamp) < _lifetime;
 
-    // What is held of a directory, where it is held and still holds.
-    private DirectoryListing? Current(string path) =>
-        _listings.TryGetValue(path, out Held held) && Fresh(held)
-            ? new DirectoryListing(held.Entries, held.Self)
-            : null;
+    // What is held of a directory, where it is held and still holds. Answering out of it is
+    // what arms the renewal: a directory nobody asks about is a directory nothing is sent
+    // for.
+    private DirectoryListing? Current(string path)
+    {
+        if (!_listings.TryGetValue(path, out Held held) || !Fresh(held))
+        {
+            return null;
+        }
+
+        Renew(path, held);
+
+        return new DirectoryListing(held.Entries, held.Self);
+    }
+
+    // A listing past half its life is fetched again behind the answer that was given out of
+    // it. A window asks about the directory it shows every few seconds, so without this the
+    // first question after every lifetime pays a round trip; with it the listing has been
+    // renewed before that question arrives. It renews early and never extends: what has run
+    // out is still fetched before it answers.
+    private void Renew(string path, Held held)
+    {
+        if (Stopwatch.GetElapsedTime(held.Stamp) < _renewal || _stopping.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (!_renewing.TryAdd(path, 0))
+        {
+            return;
+        }
+
+        // Off the answer's thread: the gate is waited at rather than awaited, and whoever
+        // asked is holding the listing in his hand already.
+        _ = Task.Run(() => FetchAgainAsync(path), CancellationToken.None);
+    }
+
+    private async Task FetchAgainAsync(string path)
+    {
+        try
+        {
+            // Behind whoever is waiting for an answer: nobody is waiting for this one, and
+            // what is held answers every question until it lands.
+            _gate.Enter(ahead: true);
+
+            bool refused = false;
+
+            try
+            {
+                // A fetch somebody is waiting for may have begun while this stood at the
+                // gate, and that one writes down what this would have written down. Joining
+                // it would hold the room for a request that is already on the wire.
+                if (_fetching.Joined(path, _stopping) is not null)
+                {
+                    return;
+                }
+
+                await _fetching
+                    .JoinAsync(path, () => ReadAsync(path), _stopping)
+                    .ConfigureAwait(false);
+            }
+            catch (ProviderException failure)
+            {
+                // Busy narrows the gate, the same as it does for a round read ahead: what
+                // nobody is waiting for is what stops being asked for. Anything else leaves
+                // the listing to run out and be fetched by whoever asks next.
+                refused = failure.Error == ProviderError.Busy;
+            }
+            catch (OperationCanceledException)
+            {
+                // The mount is coming down, and what is held goes down with it.
+            }
+            finally
+            {
+                _gate.Leave(refused);
+            }
+        }
+        finally
+        {
+            _renewing.TryRemove(path, out _);
+        }
+    }
 
     // The name at the end of a path. What is counted about a probe is the name and never the
     // path, because the same name is what arrives in directory after directory.
