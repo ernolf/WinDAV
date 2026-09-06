@@ -107,6 +107,24 @@ public sealed class MountAddRequestTests
         Assert.Equal("/Documents/Work", request.RemotePath);
     }
 
+    // What reaches a server is asked for: a command that walked a store unasked would be one
+    // that waits for an answer where nobody is at the keyboard.
+    [Fact]
+    public void APathIsTypedUnlessItIsPicked()
+    {
+        Assert.False(Read("files", "--account", "home").Pick);
+        Assert.True(Read("files", "--account", "home", "--pick").Pick);
+    }
+
+    [Fact]
+    public void APickedPathBeginsWhereItWasTold()
+    {
+        MountAddRequest request = Read("files", "--account", "home", "--pick", "--path", "/Documents");
+
+        Assert.True(request.Pick);
+        Assert.Equal("/Documents", request.RemotePath);
+    }
+
     [Fact]
     public void ALocalDiskHasNoNetworkName()
     {
