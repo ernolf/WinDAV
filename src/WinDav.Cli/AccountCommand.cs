@@ -14,7 +14,8 @@ using WinDav.Providers.Nextcloud.Ocs;
 namespace WinDav.Cli;
 
 /// <summary>
-/// Puts an account into the configuration, shows what is there, and takes one away again.
+/// Puts an account into the configuration, shows what is there, renames one, and takes one
+/// away again.
 /// </summary>
 /// <remarks>
 /// The credential never reaches the configuration file. It goes into the secret store under a
@@ -28,10 +29,12 @@ internal static class AccountCommand
 
     private const string List = "list";
 
+    private const string Rename = "rename";
+
     private const string Remove = "remove";
 
     /// <summary>
-    /// Carries out one of the three things that can be done with an account.
+    /// Carries out one of the four things that can be done with an account.
     /// </summary>
     /// <param name="line">What was typed.</param>
     /// <param name="cancellationToken">Cancels what is under way.</param>
@@ -42,14 +45,15 @@ internal static class AccountCommand
 
         string action = line.Arguments.Count > 0
             ? line.Arguments[0]
-            : throw new UsageException($"An account is added, listed or removed: '{ProductInfo.Slug} account <{Add}|{List}|{Remove}>'.");
+            : throw new UsageException($"An account is added, listed, renamed or removed: '{ProductInfo.Slug} account <{Add}|{List}|{Rename}|{Remove}>'.");
 
         return action switch
         {
             Add => await AddAsync(line, cancellationToken).ConfigureAwait(false),
             List => await ListAsync(line, cancellationToken).ConfigureAwait(false),
+            Rename => await RenameAsync(line, cancellationToken).ConfigureAwait(false),
             Remove => await RemoveAsync(line, cancellationToken).ConfigureAwait(false),
-            _ => throw new UsageException($"There is no '{ProductInfo.Slug} account {action}'. There is {Add}, {List} and {Remove}."),
+            _ => throw new UsageException($"There is no '{ProductInfo.Slug} account {action}'. There is {Add}, {List}, {Rename} and {Remove}."),
         };
     }
 
@@ -216,6 +220,56 @@ internal static class AccountCommand
         return Program.Success;
     }
 
+    // Decision 71: the id is what a person types and the uuid is what a mount points at, so
+    // this touches one line of one account and nothing else. Nothing is asked of a server:
+    // the name is this machine's, and the server has never been told it.
+    private static async Task<int> RenameAsync(CommandLine line, CancellationToken cancellationToken)
+    {
+        AccountRenameRequest request = AccountRenameRequest.Parse(line);
+
+        ConfigurationStore configuration = ConfigurationStore.Default();
+        ClientConfiguration client = await configuration.LoadAsync(cancellationToken).ConfigureAwait(false);
+
+        AccountConfiguration account = client.FindAccount(request.Account)
+            ?? throw new UsageException($"There is no account '{request.Account}', by that name or by that uuid.");
+
+        // Letter by letter, which is the one comparison here that is: an account looked up
+        // without regard to case is still found under another spelling of its own name, and
+        // writing that spelling down is what was asked for.
+        if (string.Equals(account.Id, request.Id, StringComparison.Ordinal))
+        {
+            throw new UsageException($"The account is called '{account.Id}' already.");
+        }
+
+        // Free of everything except this account itself, so that a name can be respelt
+        // without being given up first.
+        if (client.FindAccount(request.Id) is { } taken && taken != account)
+        {
+            throw new UsageException($"There is already an account named '{taken.Id}'. Another name goes here.");
+        }
+
+        string was = account.Id;
+
+        await configuration.SaveAsync(
+            new ClientConfiguration
+            {
+                Version = client.Version,
+                Accounts =
+                [
+                    .. client.Accounts.Select(other => other == account ? Renamed(account, request.Id) : other),
+                ],
+
+                // Untouched, and that is the whole point of decision 71: a mount is written
+                // down against the uuid, which a rename does not reach.
+                Mounts = client.Mounts,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        WriteRenamed(was, request.Id);
+
+        return Program.Success;
+    }
+
     private static async Task<int> RemoveAsync(CommandLine line, CancellationToken cancellationToken)
     {
         line.EnsureOnlyKnown([]);
@@ -259,6 +313,22 @@ internal static class AccountCommand
 
         return Program.Success;
     }
+
+    // Everything but the name, which is what makes it the same account under another one.
+    // Written out rather than copied wholesale because the configuration is what is on disk:
+    // a field added there and forgotten here would be a field a rename silently drops.
+    private static AccountConfiguration Renamed(AccountConfiguration account, string id) =>
+        new()
+        {
+            Uuid = account.Uuid,
+            Id = id,
+            Server = account.Server,
+            Provider = account.Provider,
+            UserId = account.UserId,
+            LoginId = account.LoginId,
+            SecretRef = account.SecretRef,
+            IssuedHere = account.IssuedHere,
+        };
 
     // Named for what it is rather than for the seam it fits: choosing the store is what the
     // program that runs is for, and this one has chosen. Decision 68 says which and why.
@@ -547,6 +617,9 @@ internal static class AccountCommand
         Console.Error.WriteLine(
             $"It is listed there under Settings, Security, as a device named after {ProductInfo.Name}.");
     }
+
+    private static void WriteRenamed(string was, string id) =>
+        Console.WriteLine($"The account '{was}' is now '{id}'.");
 
     private static void WriteRemoved(string id) =>
         Console.WriteLine($"The account '{id}' is gone, and so is its credential.");

@@ -91,6 +91,17 @@ public sealed class AccountAddRequestTests
     public void WhatIsNotAnHttpAddressIsRefused(string address) =>
         Assert.Throws<UsageException>(() => Parse("account", "add", address));
 
+    // The same rule a rename is held to: a name is set in two places, and one that is refused
+    // in only one of them is a name the other still writes.
+    [Fact]
+    public void ANameThatCouldNotBeOneIsRefusedHereAsWell()
+    {
+        Assert.Throws<UsageException>(
+            () => Parse("account", "add", "https://cloud.example.com/", "--id", string.Empty));
+        Assert.Throws<UsageException>(
+            () => Parse("account", "add", "https://cloud.example.com/", "--id", Guid.NewGuid().ToString()));
+    }
+
     [Fact]
     public void AnOptionThisCommandHasNoUseForIsRefused() =>
         Assert.Throws<UsageException>(

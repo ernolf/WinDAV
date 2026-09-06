@@ -189,6 +189,7 @@ internal static class Program
             Usage:
               {ProductInfo.Slug} account add <url> [options]
               {ProductInfo.Slug} account list
+              {ProductInfo.Slug} account rename <account> <name>
               {ProductInfo.Slug} account remove <account>
               {ProductInfo.Slug} mount <mount>
               {ProductInfo.Slug} mount add <mount> --account <account> [options]
@@ -328,8 +329,10 @@ internal static class Program
               'account remove' withdraws the app password the login was given, unless another
               account here is signed in with the same one. A password that was typed in by
               hand is withdrawn only if you say so.
-              An account is named by its id or by its uuid, and 'account list' shows both. A
-              mount is written down against the uuid, so changing an id leaves it alone.
+              An account is named by its id or by its uuid, and 'account list' shows both.
+              'account rename' changes the id, which is this machine's name for the account
+              and one no server is ever told. A mount is written down against the uuid, so a
+              rename leaves it alone.
               A server may let one user in under more than one name. An account is reached
               under the name its app password was made for, which is not always the one that
               was typed. Adding a second name for a user that is here already is asked about
