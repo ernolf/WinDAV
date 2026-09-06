@@ -157,9 +157,13 @@ public sealed class WinDavFileSystem : FileSystemBase
         fileSystemHost.FileInfoTimeout = FileInfoTimeoutMilliseconds;
         fileSystemHost.VolumeInfoTimeout = VolumeInfoTimeoutMilliseconds;
 
-        // What a WebDAV server is: names keep their case, and two names that differ only in
-        // case are the same name.
-        fileSystemHost.CaseSensitiveSearch = false;
+        // Decision 85: what the store behind this mount is, said plainly rather than smoothed
+        // over. A name goes to the server as it was typed, so two names differing only in
+        // case are two names and both of them can be here at once. Windows takes this at its
+        // word and every program on it is written to that word, which is exactly why the
+        // easier claim is the wrong one: a volume that called the two spellings one name and
+        // then answered 404 for the second would be lying to all of them at once.
+        fileSystemHost.CaseSensitiveSearch = true;
         fileSystemHost.CasePreservedNames = true;
         fileSystemHost.UnicodeOnDisk = true;
         fileSystemHost.PersistentAcls = true;
