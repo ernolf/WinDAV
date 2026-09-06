@@ -21,12 +21,15 @@ public sealed class DirectoryCacheTests
     // Long enough that nothing runs out while a test is about something else.
     private static readonly TimeSpan s_ample = TimeSpan.FromMinutes(5);
 
-    // A lifetime with room on both sides of its half, for the tests about the renewal: a
-    // wait past the half has as much of the lifetime left over as a brief one has room.
-    private static readonly TimeSpan s_life = TimeSpan.FromSeconds(1);
+    // A lifetime with room on both sides of its half, for the tests about the renewal. Long
+    // where a lifetime does not have to be, because these are the tests that need a wait to
+    // land between two marks rather than past one: a machine running the whole suite hands a
+    // 200ms delay back a second late often enough, and a second of that is what the room
+    // above s_halfway is for.
+    private static readonly TimeSpan s_life = TimeSpan.FromSeconds(4);
 
     // Past half of that lifetime and well inside the whole of it.
-    private static readonly TimeSpan s_halfway = TimeSpan.FromMilliseconds(600);
+    private static readonly TimeSpan s_halfway = TimeSpan.FromMilliseconds(2200);
 
     // How long a test waits for what happens behind whoever asked. Never reached when the
     // work is done, and it is done in microseconds against a store that is a dictionary.
@@ -117,13 +120,15 @@ public sealed class DirectoryCacheTests
 
         store.AddDirectory("/music", "v1");
 
-        DirectoryCache cache = Cache(store, Off, s_life);
+        // A brief lifetime rather than s_life, because this one waits past the end of it and
+        // has no mark above to stay under.
+        DirectoryCache cache = Cache(store, Off, s_brief);
 
         await cache.ListAsync("/music", TestContext.Current.CancellationToken);
 
         // Past the whole lifetime rather than half of it: what arms a renewal is an answer,
         // so a mount nobody looks at sends nothing at all.
-        await Task.Delay(s_life + s_brief, TestContext.Current.CancellationToken);
+        await Task.Delay(s_brief + s_brief, TestContext.Current.CancellationToken);
 
         Assert.Equal<string>(["/music"], store.Listed);
     }
