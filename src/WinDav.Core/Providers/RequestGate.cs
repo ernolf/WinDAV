@@ -23,6 +23,12 @@ namespace WinDav.Core.Providers;
 /// up with a rule against the program, and it costs bytes rather than winning them. See
 /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#75-the-read-path-read-ahead-keep-attributes-briefly-and-let-the-server-set-the-width">decision 75</see>.
 /// </para>
+/// <para>
+/// The room is not given out in the order it was asked for. A request somebody is waiting for
+/// an answer to goes in front of one that is read ahead, because the second is wanted by
+/// nobody yet and the first is what a person is looking at. It is a rank and not a claim: a
+/// round that holds the room already keeps it until its request has been answered.
+/// </para>
 /// </remarks>
 public sealed class RequestGate
 {
@@ -44,6 +50,10 @@ public sealed class RequestGate
     private int _width;
     private int _inFlight;
     private long _changed;
+
+    // How many requests somebody is waiting for an answer to are outside the gate. What is
+    // read ahead stands back for as long as this is above nothing.
+    private int _waiting;
 
     /// <summary>
     /// Initialises a new instance of the <see cref="RequestGate"/> class.
@@ -87,20 +97,56 @@ public sealed class RequestGate
     /// <summary>
     /// Waits until there is room for one more request, and takes it.
     /// </summary>
+    /// <param name="ahead">
+    /// Whether this is a request nobody is waiting for. One that is read ahead stands back
+    /// for as long as anybody is waiting for room, and takes what is left over.
+    /// </param>
     /// <remarks>
     /// Every call is answered by exactly one <see cref="Leave"/>, from a finally block, or
     /// the room is never given back.
     /// </remarks>
-    public void Enter()
+    public void Enter(bool ahead = false)
     {
         lock (_sync)
         {
-            while (_inFlight >= _width)
+            if (ahead)
             {
-                Monitor.Wait(_sync);
+                // Room, and nobody in front of it. A round that goes out while somebody is
+                // waiting for an answer puts its round trip in front of his, and what it
+                // brings back is wanted by nobody yet.
+                while (_inFlight >= _width || _waiting > 0)
+                {
+                    Monitor.Wait(_sync);
+                }
+
+                _inFlight++;
+
+                return;
+            }
+
+            _waiting++;
+
+            try
+            {
+                while (_inFlight >= _width)
+                {
+                    Monitor.Wait(_sync);
+                }
+            }
+            finally
+            {
+                _waiting--;
             }
 
             _inFlight++;
+
+            // The last one that was in the way has gone in and there is room left over: a
+            // round that stood back for him may have it now, rather than wait for a request
+            // to end that nothing is going to end.
+            if (_waiting == 0 && _inFlight < _width)
+            {
+                Monitor.PulseAll(_sync);
+            }
         }
     }
 

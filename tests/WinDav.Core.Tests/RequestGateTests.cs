@@ -126,26 +126,105 @@ public sealed class RequestGateTests
 
         gate.Enter();
 
-        Task waiting = Task.Run(
-            () =>
-            {
-                gate.Enter();
-                gate.Leave(refused: false);
-            },
-            TestContext.Current.CancellationToken);
+        Task waiting = Enters(gate, ahead: false);
 
         // The room is taken, so the second request is still outside the gate. This is the
         // whole of what the number does: it holds a thread back, it starts nothing.
-        Task first = await Task.WhenAny(
-            waiting,
-            Task.Delay(TimeSpan.FromMilliseconds(200), TestContext.Current.CancellationToken));
-
-        Assert.NotSame(waiting, first);
+        await Outside(waiting);
 
         gate.Leave(refused: false);
 
-        await waiting.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await Inside(waiting);
     }
+
+    [Fact]
+    public async Task AReadGoesInFrontOfWhatIsReadAhead()
+    {
+        Recorder log = new();
+        RequestGate gate = new(1, log, s_never);
+
+        gate.Enter();
+
+        // The round arrives first and the read after it, so that the order they were let in
+        // cannot be the order they came in: what settles it is the rank and nothing else.
+        Task ahead = Enters(gate, ahead: true);
+        await Outside(ahead);
+
+        Task read = Enters(gate, ahead: false);
+        await Outside(read);
+
+        gate.Leave(refused: false);
+
+        // The one place went to the read. The round is where it was, and what it waits for
+        // now is a place the read is not waiting for.
+        await Inside(read);
+        await Outside(ahead);
+
+        gate.Leave(refused: false);
+
+        await Inside(ahead);
+    }
+
+    [Fact]
+    public async Task WhatIsReadAheadTakesTheRoomNobodyIsWaitingFor()
+    {
+        Recorder log = new();
+        RequestGate gate = new(2, log, s_never);
+
+        gate.Enter();
+
+        // Room left over and nobody outside it: standing back costs a round nothing where
+        // there is nobody to stand back for. That is the whole of the rank.
+        await Inside(Enters(gate, ahead: true));
+    }
+
+    [Fact]
+    public async Task RoomThatOpensWiderLetsTheReadInAndTheRoundBehindIt()
+    {
+        Recorder log = new();
+        RequestGate gate = new(2, log, s_atOnce);
+
+        Refuse(gate);
+
+        Assert.Equal(1, gate.Width);
+
+        gate.Enter();
+
+        Task ahead = Enters(gate, ahead: true);
+        await Outside(ahead);
+
+        Task read = Enters(gate, ahead: false);
+        await Outside(read);
+
+        // One request ends, and the width grows back on the way out of it: two places open
+        // where one was given up. The read takes the first, and the round takes the second
+        // rather than wait for a request to end that nothing is going to end.
+        gate.Leave(refused: false);
+
+        await Inside(read);
+        await Inside(ahead);
+    }
+
+    // A request outside the gate that takes its place and keeps it. The room is given back by
+    // the test rather than by the thread that took it, so that what is let in next is the
+    // gate's decision and not a race between two threads leaving.
+    private static Task Enters(RequestGate gate, bool ahead) =>
+        Task.Run(() => gate.Enter(ahead), TestContext.Current.CancellationToken);
+
+    // Long enough that a thread which was going to get in has got in, short enough to be
+    // worth waiting for twice in one test.
+    private static async Task Outside(Task waiting)
+    {
+        Task first = await Task.WhenAny(
+            waiting,
+            Task.Delay(TimeSpan.FromMilliseconds(200), TestContext.Current.CancellationToken))
+            .ConfigureAwait(false);
+
+        Assert.NotSame(waiting, first);
+    }
+
+    private static Task Inside(Task waiting) =>
+        waiting.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
     private static void Refuse(RequestGate gate)
     {

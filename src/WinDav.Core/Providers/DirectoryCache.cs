@@ -977,7 +977,8 @@ public sealed class DirectoryCache : IStorageProvider
 
             bool refused = false;
 
-            _gate.Enter();
+            // Behind whoever is waiting for an answer: nobody is waiting for this one yet.
+            _gate.Enter(ahead: true);
 
             // From the moment there is room for the request, the same as a read is measured
             // from: what a round waits for at the gate is the gate's to say.
