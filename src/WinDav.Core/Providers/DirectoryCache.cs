@@ -3,6 +3,9 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using WinDav.Abstractions;
 
 namespace WinDav.Core.Providers;
@@ -79,6 +82,10 @@ namespace WinDav.Core.Providers;
 /// </remarks>
 public sealed class DirectoryCache : IStorageProvider
 {
+    // Milliseconds with one place, the same as the reads and the wire are written with, so
+    // that a listing read ahead and the request underneath it can be laid side by side.
+    private const string ElapsedFormat = "0.#";
+
     // Ordinal, for the reason the attribute cache is ordinal: a store that keeps case has two
     // directories where these differ.
     private readonly ConcurrentDictionary<string, Held> _listings = new(StringComparer.Ordinal);
@@ -122,6 +129,7 @@ public sealed class DirectoryCache : IStorageProvider
     private readonly TimeSpan _lifetime;
     private readonly DirectorySettings _settings;
     private readonly RequestGate _gate;
+    private readonly ILogger _log;
     private readonly CancellationToken _stopping;
 
     private int _budget;
@@ -130,6 +138,12 @@ public sealed class DirectoryCache : IStorageProvider
     // The directory the round that is waiting was begun in, so that a window asking about
     // the one it shows again is not taken for somebody who has moved.
     private string? _round;
+
+    // The round a line has been written for that has no end yet. Not the round that is
+    // running: a round is ended by whoever finds it over, and by then the reader may stand
+    // somewhere else and a round of his own may have begun. Taken rather than read, so that
+    // what was written down once is ended once.
+    private string? _open;
 
     /// <summary>
     /// Initialises a new instance of the <see cref="DirectoryCache"/> class.
@@ -148,6 +162,11 @@ public sealed class DirectoryCache : IStorageProvider
     /// The one that says how many requests this mount may have on the wire. Listing ahead
     /// happens behind whatever a person is waiting for, so it asks the same gate for room.
     /// </param>
+    /// <param name="log">
+    /// Where a round is written down, or <see langword="null"/> for nowhere. The area follows
+    /// from the namespace, so a logger made for this type lands in the provider area by
+    /// itself.
+    /// </param>
     /// <param name="stopping">Ends the listing ahead; the mount coming down is what ends it.</param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">
@@ -159,6 +178,7 @@ public sealed class DirectoryCache : IStorageProvider
         TimeSpan lifetime,
         DirectorySettings? settings,
         RequestGate gate,
+        ILogger? log = null,
         CancellationToken stopping = default)
     {
         ArgumentNullException.ThrowIfNull(inner);
@@ -169,6 +189,7 @@ public sealed class DirectoryCache : IStorageProvider
         _lifetime = lifetime;
         _settings = settings ?? new DirectorySettings();
         _gate = gate;
+        _log = log ?? NullLogger.Instance;
         _stopping = stopping;
     }
 
@@ -193,6 +214,7 @@ public sealed class DirectoryCache : IStorageProvider
     /// </param>
     /// <param name="settings">How far ahead to list, and how much to hold.</param>
     /// <param name="gate">The one that says how many requests may be on the wire.</param>
+    /// <param name="log">Where a round is written down, or <see langword="null"/> for nowhere.</param>
     /// <param name="stopping">Ends the listing ahead.</param>
     /// <returns>The store to ask from here on.</returns>
     /// <exception cref="ArgumentNullException">
@@ -203,6 +225,7 @@ public sealed class DirectoryCache : IStorageProvider
         TimeSpan lifetime,
         DirectorySettings? settings,
         RequestGate gate,
+        ILogger? log = null,
         CancellationToken stopping = default)
     {
         ArgumentNullException.ThrowIfNull(provider);
@@ -211,7 +234,7 @@ public sealed class DirectoryCache : IStorageProvider
 
         return lifetime <= TimeSpan.Zero || asked.Directories <= 0
             ? provider
-            : new DirectoryCache(provider, lifetime, asked, gate, stopping);
+            : new DirectoryCache(provider, lifetime, asked, gate, log, stopping);
     }
 
     /// <inheritdoc/>
@@ -235,8 +258,16 @@ public sealed class DirectoryCache : IStorageProvider
             // that is the gate, and it is two. The same directory again is the same round
             // and is left alone: a window asks about the one it shows every few seconds, and
             // a level below it that is waiting cannot be queued again from where he stands.
-            if (!string.Equals(Interlocked.Exchange(ref _round, path), path, StringComparison.Ordinal))
+            string? left = Interlocked.Exchange(ref _round, path);
+
+            if (!string.Equals(left, path, StringComparison.Ordinal))
             {
+                // Whether or not anything was still waiting for it: a round whose queue
+                // has run dry while its last children are on the wire is one he can still
+                // leave, and what they bring back is read by nobody. One that has ended
+                // already is not ended twice, because its end was written with it.
+                Stopped("dropped");
+
                 Empty();
             }
 
@@ -250,12 +281,12 @@ public sealed class DirectoryCache : IStorageProvider
         // the directory it read ahead is answered from what is held and queues nothing.
         if (Current(path) is DirectoryListing current)
         {
-            Queue(current.Entries, depth);
+            Queue(path, current.Entries, depth, reading);
 
             return current;
         }
 
-        return await FetchAsync(path, depth, cancellationToken).ConfigureAwait(false);
+        return await FetchAsync(path, depth, reading, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -308,7 +339,7 @@ public sealed class DirectoryCache : IStorageProvider
                 // Listed at depth nothing: nobody opened that directory, somebody asked about
                 // one name in it, and what is read ahead belongs to a directory a person is
                 // looking at.
-                listing = await FetchAsync(around, 0, cancellationToken).ConfigureAwait(false);
+                listing = await FetchAsync(around, 0, reading: false, cancellationToken).ConfigureAwait(false);
                 bought = true;
             }
 
@@ -610,12 +641,16 @@ public sealed class DirectoryCache : IStorageProvider
     private async Task<DirectoryListing> CurrentAsync(string path, CancellationToken cancellationToken) =>
         Current(path) is DirectoryListing current
             ? current
-            : await FetchAsync(path, 0, cancellationToken).ConfigureAwait(false);
+            : await FetchAsync(path, 0, reading: false, cancellationToken).ConfigureAwait(false);
 
     // Every fetch goes through here, the one somebody is waiting for and the one read ahead
     // alike: the two meet on a directory the reader has reached first, and one of them is a
     // request that need not be sent.
-    private async Task<DirectoryListing> FetchAsync(string path, int depth, CancellationToken cancellationToken)
+    private async Task<DirectoryListing> FetchAsync(
+        string path,
+        int depth,
+        bool reading,
+        CancellationToken cancellationToken)
     {
         DirectoryListing listing = await _fetching
             .JoinAsync(path, () => ReadAsync(path), cancellationToken)
@@ -624,7 +659,7 @@ public sealed class DirectoryCache : IStorageProvider
         // Outside the join, with the depth of whoever asked: what a caller wants read ahead
         // is not what the caller it joined wants, and the one that joined a shallower fetch
         // would otherwise get nothing read ahead at all.
-        Queue(listing.Entries, depth);
+        Queue(path, listing.Entries, depth, reading);
 
         return listing;
     }
@@ -771,7 +806,7 @@ public sealed class DirectoryCache : IStorageProvider
         }
     }
 
-    private void Queue(IReadOnlyList<RemoteEntry> entries, int depth)
+    private void Queue(string path, IReadOnlyList<RemoteEntry> entries, int depth, bool reading)
     {
         if (depth <= 0 || Volatile.Read(ref _budget) <= 0 || _stopping.IsCancellationRequested)
         {
@@ -779,11 +814,21 @@ public sealed class DirectoryCache : IStorageProvider
         }
 
         List<RemoteEntry> wanted = [];
+        int held = 0;
 
         foreach (RemoteEntry entry in entries)
         {
-            if (!entry.IsDirectory || (_listings.TryGetValue(entry.Path, out Held held) && Fresh(held)))
+            if (!entry.IsDirectory)
             {
+                continue;
+            }
+
+            // There already and still good: what a round over this directory left behind
+            // before, or what the reader has opened himself.
+            if (_listings.TryGetValue(entry.Path, out Held child) && Fresh(child))
+            {
+                held++;
+
                 continue;
             }
 
@@ -792,8 +837,30 @@ public sealed class DirectoryCache : IStorageProvider
 
         if (wanted.Count == 0)
         {
+            // A look that queues nothing is where a round has read everything below the
+            // directory somebody is standing in, and without a line it is the same absence as
+            // a prefetch that has stopped working. Only where he is standing: a level queued
+            // by the round itself would put one of these behind every child already held.
+            if (reading && _log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug(
+                    "Nothing to read ahead of {Path}: its {Total} children are files or held.",
+                    path,
+                    entries.Count);
+            }
+
             return;
         }
+
+        // Not the first round over this directory: a level the round queued for itself is
+        // part of a round that is written down already, a look of the reader's while a round
+        // of his has no end yet adds to that one, and a look at a directory part of which is
+        // there takes up what an earlier round did not reach. The last is the ordinary one: a
+        // round is cut to what its budget can spend, so a directory with more children than
+        // that is read ahead over as many rounds as the reader goes into it.
+        bool further = !reading
+            || held > 0
+            || string.Equals(Volatile.Read(ref _open), path, StringComparison.Ordinal);
 
         // Newest first. A round is a few seconds long at two requests in flight, and what it
         // does not reach is dropped rather than carried over, so the order decides both which
@@ -804,12 +871,47 @@ public sealed class DirectoryCache : IStorageProvider
         // upwards the right answer here rather than the wrong one. The order is stable, so
         // equal times keep the order the server gave, and a child the store gave no time for
         // goes last rather than out: not every store fills it in.
-        Push(
+        int queued = Push(
         [
             .. wanted
                 .OrderByDescending(directory => directory.LastModified ?? DateTimeOffset.MinValue)
                 .Select(directory => new Wanted(directory.Path, depth - 1)),
         ]);
+
+        // From here the round is written down, and what is written down gets an end. The
+        // round rather than this directory: one level of a round queues the next, and the end
+        // of it belongs to the directory the reader is standing in.
+        Volatile.Write(ref _open, Volatile.Read(ref _round) ?? path);
+
+        if (_log.IsEnabled(LogLevel.Debug))
+        {
+            // The directory the round belongs to, so that everything the round sends can be
+            // told from the listing somebody waited for. What is queued is what came back
+            // from the queue rather than what was wanted: a round is cut to what its budget
+            // can spend.
+            int budget = Volatile.Read(ref _budget);
+
+            if (further)
+            {
+                _log.LogDebug(
+                    "Reading further ahead of {Path}: {Count} of {Total} children queued at depth {Depth}, budget {Budget}.",
+                    path,
+                    queued,
+                    entries.Count,
+                    depth,
+                    budget);
+            }
+            else
+            {
+                _log.LogDebug(
+                    "Reading ahead of {Path}: {Count} of {Total} children queued at depth {Depth}, budget {Budget}.",
+                    path,
+                    queued,
+                    entries.Count,
+                    depth,
+                    budget);
+            }
+        }
 
         Pump();
     }
@@ -854,6 +956,7 @@ public sealed class DirectoryCache : IStorageProvider
         {
             if (Interlocked.Decrement(ref _budget) < 0)
             {
+                Stopped("spent");
                 Empty();
 
                 return;
@@ -861,6 +964,14 @@ public sealed class DirectoryCache : IStorageProvider
 
             if (_listings.TryGetValue(wanted.Path, out Held held) && Fresh(held))
             {
+                // The reader got there first, or a round before this one did. It is the one
+                // end of a round that costs nothing, and without a line of its own it is
+                // indistinguishable from a round that never ran.
+                if (_log.IsEnabled(LogLevel.Debug))
+                {
+                    _log.LogDebug("Skipped {Path}: held.", wanted.Path);
+                }
+
                 continue;
             }
 
@@ -868,9 +979,22 @@ public sealed class DirectoryCache : IStorageProvider
 
             _gate.Enter();
 
+            // From the moment there is room for the request, the same as a read is measured
+            // from: what a round waits for at the gate is the gate's to say.
+            long started = Stopwatch.GetTimestamp();
+
             try
             {
-                await FetchAsync(wanted.Path, wanted.Depth, _stopping).ConfigureAwait(false);
+                await FetchAsync(wanted.Path, wanted.Depth, reading: false, _stopping).ConfigureAwait(false);
+
+                if (_log.IsEnabled(LogLevel.Debug))
+                {
+                    _log.LogDebug(
+                        "Read ahead {Path} at depth {Depth} in {Elapsed} ms.",
+                        wanted.Path,
+                        wanted.Depth,
+                        Elapsed(started));
+                }
             }
             catch (ProviderException failure)
             {
@@ -881,6 +1005,7 @@ public sealed class DirectoryCache : IStorageProvider
 
                 if (refused)
                 {
+                    Stopped("busy");
                     Empty();
                 }
             }
@@ -898,10 +1023,36 @@ public sealed class DirectoryCache : IStorageProvider
                 return;
             }
         }
+
+        Stopped("empty");
     }
 
-    // A round to the front, in the order it was sorted into.
-    private void Push(IReadOnlyList<Wanted> round)
+    // Where a round ended and what was still waiting when it did. Read before the queue is
+    // emptied, because what was left over is the whole of what the line says. The round is
+    // taken from under whoever else would end it, so a round that has ended is not ended
+    // again and one that was never written down is not ended at all.
+    private void Stopped(string reason)
+    {
+        string? path = Interlocked.Exchange(ref _open, null);
+
+        if (path is null || !_log.IsEnabled(LogLevel.Debug))
+        {
+            return;
+        }
+
+        _log.LogDebug(
+            "Stopped reading ahead of {Path}: {Reason}, {Left} in the queue.",
+            path,
+            reason,
+            Queued());
+    }
+
+    private static string Elapsed(long started) =>
+        Stopwatch.GetElapsedTime(started).TotalMilliseconds.ToString(ElapsedFormat, CultureInfo.InvariantCulture);
+
+    // A round to the front, in the order it was sorted into, and how much of it is still
+    // there afterwards.
+    private int Push(IReadOnlyList<Wanted> round)
     {
         lock (_queued)
         {
@@ -918,14 +1069,20 @@ public sealed class DirectoryCache : IStorageProvider
             {
                 _queue.RemoveLast();
             }
+
+            // The round went in at the front, so what is left of it is the front of what
+            // is there.
+            return Math.Min(round.Count, _queue.Count);
         }
     }
 
-    private bool Waiting()
+    private bool Waiting() => Queued() > 0;
+
+    private int Queued()
     {
         lock (_queued)
         {
-            return _queue.Count > 0;
+            return _queue.Count;
         }
     }
 
