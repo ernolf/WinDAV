@@ -21,6 +21,7 @@ internal sealed class MountAddRequest
     [
         "--account",
         "--path",
+        "--pick",
         "--mount",
         "--label",
         "--icon",
@@ -46,6 +47,16 @@ internal sealed class MountAddRequest
     /// Gets the path on the store that becomes the root of the mount.
     /// </summary>
     internal required string RemotePath { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether the path is to be walked to rather than typed.
+    /// </summary>
+    /// <remarks>
+    /// Asked for and never assumed: this is the one thing about writing a mount down that
+    /// reaches a server and waits for somebody to answer, and a command that did it unasked
+    /// would be one that hangs in a script.
+    /// </remarks>
+    internal required bool Pick { get; init; }
 
     /// <summary>
     /// Gets the drive letter the mount takes, or <see langword="null"/>.
@@ -125,6 +136,7 @@ internal sealed class MountAddRequest
             Id = id,
             Account = account,
             RemotePath = MountOptions.ReadPath(line.Value("--path")),
+            Pick = line.Flag("--pick"),
             DriveLetter = driveLetter,
             Directory = directory,
             Label = MountOptions.ReadLabel(line.Value("--label")),

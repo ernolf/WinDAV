@@ -20,8 +20,8 @@ namespace WinDav.Cli;
 /// The mount lasts as long as the command runs, because a mount lasts as long as the process
 /// that owns it. What runs unattended is a service, and that is a later matter; this is the
 /// command a person uses to see the thing work. What is written down is not made here: adding
-/// a mount asks nothing of a server, and running it by its name is the same mount as the one
-/// its options would have made. See
+/// a mount asks nothing of a server, save for the walk that <c>--pick</c> asks for, and
+/// running it by its name is the same mount as the one its options would have made. See
 /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#73-a-mount-that-stays">decision 73</see>.
 /// </remarks>
 internal static class MountCommand
@@ -68,7 +68,7 @@ internal static class MountCommand
 
         return action switch
         {
-            Add => await AddAsync(line, cancellationToken).ConfigureAwait(false),
+            Add => await AddAsync(line, logging, cancellationToken).ConfigureAwait(false),
             List => await ListAsync(line, cancellationToken).ConfigureAwait(false),
             Remove => await RemoveAsync(line, cancellationToken).ConfigureAwait(false),
             _ => await MountAsync(line, reads, attributes, directories, logging, cancellationToken).ConfigureAwait(false),
@@ -200,7 +200,10 @@ internal static class MountCommand
         return Program.Success;
     }
 
-    private static async Task<int> AddAsync(CommandLine line, CancellationToken cancellationToken)
+    private static async Task<int> AddAsync(
+        CommandLine line,
+        ILoggerFactory logging,
+        CancellationToken cancellationToken)
     {
         MountAddRequest request = MountAddRequest.Parse(line);
 
@@ -212,11 +215,20 @@ internal static class MountCommand
             throw new UsageException($"There is already a mount named '{request.Id}'.");
         }
 
-        // Decision 73: nothing is asked of a server here, so what can be checked is what the
-        // file itself answers. That the account is there is the one thing that would make
-        // this mount unrunnable, and it is worth saying now rather than at the first attempt.
+        // Decision 73: nothing is asked of a server here unless the path is to be picked, so
+        // what can be checked is what the file itself answers. That the account is there is
+        // the one thing that would make this mount unrunnable, and it is worth saying now
+        // rather than at the first attempt.
         AccountConfiguration account = client.FindAccount(request.Account)
             ?? throw new UsageException($"There is no account '{request.Account}', by that name or by that uuid.");
+
+        // The one thing here that reaches a server, and it happens because it was asked for.
+        // Everything the mount is checked against has been checked by now: a walk through a
+        // store is a minute of somebody's time, and finding out afterwards that the name was
+        // taken would throw that minute away.
+        string remotePath = request.Pick
+            ? await PickAsync(account, request.RemotePath, logging, cancellationToken).ConfigureAwait(false)
+            : request.RemotePath;
 
         await configuration.SaveAsync(
             new ClientConfiguration
@@ -233,7 +245,7 @@ internal static class MountCommand
                         // Decision 71: the identity, so that renaming the account afterwards
                         // leaves this mount standing.
                         Account = account.Uuid.ToString(),
-                        RemotePath = request.RemotePath,
+                        RemotePath = remotePath,
                         DriveLetter = request.DriveLetter,
                         Directory = request.Directory,
                         Label = request.Label,
@@ -248,6 +260,34 @@ internal static class MountCommand
         WriteAdded(request.Id, account.Id, configuration.FilePath);
 
         return Program.Success;
+    }
+
+    // Decision 73: a path typed from memory is where a mount that is written down goes wrong,
+    // the way a typed password was before the login flow. What is on the store is what the
+    // store is asked, and the walk is where the answer comes from.
+    private static async Task<string> PickAsync(
+        AccountConfiguration account,
+        string start,
+        ILoggerFactory logging,
+        CancellationToken cancellationToken)
+    {
+        if (account.Server is null)
+        {
+            throw new UsageException($"The account '{account.Id}' has no server, so there is nothing to walk.");
+        }
+
+        // Rooted at the whole account rather than at the path the walk begins in, because a
+        // walk goes up as well as down and a provider cannot reach above its own root. What
+        // --path gave is where it starts, and nothing more.
+        using IStorageConnection connection = await new AccountConnector(
+                Providers.All(logging),
+                DpapiSecretStore.Default(),
+                logging)
+            .ConnectAsync(account, MountConfiguration.RootPath, cancellationToken)
+            .ConfigureAwait(false);
+
+        return await FolderPicker.Over(connection.Provider).PickAsync(start, cancellationToken).ConfigureAwait(false)
+            ?? throw new UsageException("Nothing was picked, so no mount was written down.");
     }
 
     private static async Task<int> ListAsync(CommandLine line, CancellationToken cancellationToken)

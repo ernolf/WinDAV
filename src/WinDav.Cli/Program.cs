@@ -221,6 +221,9 @@ internal static class Program
             Options of mount and mount add:
               --account <account>  The account to mount, instead of an address and a login.
               --path <path>        What becomes the root of the drive. Default: the whole account.
+              --pick               Walk the store and take the root from what is there, rather
+                                   than typing it. Only 'mount add', and only when it is asked
+                                   for; --path is where the walk begins.
               --mount <X:|folder>  A drive letter, or an empty folder. Default: the next free letter.
               --label <text>       What the drive is called. Default: <user>@<server>, or the folder.
               --icon <file>        The drive icon, from an .ico. Default: the one for a network drive.
@@ -333,9 +336,10 @@ internal static class Program
               first, and saying yes to it makes a second account for the same files.
 
             Mounts:
-              'mount add' writes a mount down and asks nothing of a server. Run it afterwards
-              by its name alone: what it was given is what it keeps, so a stored mount takes
-              no options. 'mount list' shows what is there, and 'mount remove' takes one away
+              'mount add' writes a mount down and asks nothing of a server, unless --pick is
+              given: that walks the store, a directory at a time, and writes down the one that
+              is taken. Run it afterwards by its name alone: what it was given is what it
+              keeps, so a stored mount takes no options. 'mount list' shows what is there, and 'mount remove' takes one away
               without touching the account it was made from.
               A mount made from an account needs no --provider, --user or --anonymous: the
               account holds the server, the user and the credential. Those three belong to a
@@ -386,7 +390,9 @@ internal static class Program
         return Failed;
     }
 
-    private static string Describe(ProviderException failure)
+    // Read by the picker as well, which says why a directory could not be walked into and
+    // carries on. One wording for one failure, wherever it is written.
+    internal static string Describe(ProviderException failure)
     {
         string reason = failure.Error switch
         {
