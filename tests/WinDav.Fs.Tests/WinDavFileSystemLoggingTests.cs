@@ -73,8 +73,7 @@ public sealed class WinDavFileSystemLoggingTests
         Assert.Empty(Records(logging, LogLevel.Debug));
     }
 
-    // "The drive is read only" is the first thing a person asks about, and Windows' own
-    // wording for it names no operation.
+    // Windows' own wording for a volume that will not take something names no operation.
     [Fact]
     public void ARefusedWriteSaysWhichOperationItWas()
     {
@@ -86,7 +85,7 @@ public sealed class WinDavFileSystemLoggingTests
             fileSystem.SetVolumeLabel("Anything", out _));
 
         Assert.Contains(
-            "Refused SetVolumeLabel: everything on this volume is read only.",
+            "Refused SetVolumeLabel: this volume does not take it.",
             Written(logging, LogLevel.Debug),
             StringComparison.Ordinal);
     }

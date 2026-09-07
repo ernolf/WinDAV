@@ -21,7 +21,7 @@ public sealed class MountRequestTests
         MountRequest request = Read("--user", "alice");
 
         Assert.Equal("alice@cloud.example.com", Label(request, "alice"));
-        Assert.Equal("\\cloud.example.com\\alice", Prefix(request, "alice"));
+        Assert.Equal("\\cloud_example_com\\alice", Prefix(request, "alice"));
         Assert.Equal("/", request.RemotePath);
         Assert.Equal(NextcloudProviderFactory.ProviderName, request.Provider);
         Assert.True(request.NeedsSecret);
@@ -38,7 +38,21 @@ public sealed class MountRequestTests
 
         Assert.Equal("alice@example.com", request.LoginId);
         Assert.Equal("alice@cloud.example.com", Label(request, "alice"));
-        Assert.Equal("\\cloud.example.com\\alice", Prefix(request, "alice"));
+        Assert.Equal("\\cloud_example_com\\alice", Prefix(request, "alice"));
+    }
+
+    // The zone Windows puts a network path in comes off the server name, and one with a dot
+    // in it is the internet zone, where the shell asks before it will move a file. A mount
+    // is reached under this name whatever it is called, so it is called something that lands
+    // in the intranet.
+    [Fact]
+    public void ADerivedNetworkNameHasNoDotsInIt()
+    {
+        MountRequest request = Read("--user", "alice");
+        string? prefix = Prefix(request, "alice");
+
+        Assert.NotNull(prefix);
+        Assert.DoesNotContain('.', prefix);
     }
 
     [Fact]
@@ -47,7 +61,7 @@ public sealed class MountRequestTests
         MountRequest request = Read("--user", "alice", "--path", "/Documents/Work");
 
         Assert.Equal("Work", Label(request, "alice"));
-        Assert.Equal("\\cloud.example.com\\Work", Prefix(request, "alice"));
+        Assert.Equal("\\cloud_example_com\\Work", Prefix(request, "alice"));
     }
 
     [Fact]
@@ -129,7 +143,7 @@ public sealed class MountRequestTests
         Assert.Null(request.LoginId);
         Assert.Equal(WebDavProviderFactory.ProviderName, request.Provider);
         Assert.Equal("cloud.example.com", Label(request, null));
-        Assert.Equal($"\\cloud.example.com\\{ProductInfo.Slug}", Prefix(request, null));
+        Assert.Equal($"\\cloud_example_com\\{ProductInfo.Slug}", Prefix(request, null));
     }
 
     [Fact]
@@ -195,7 +209,7 @@ public sealed class MountRequestTests
         MountRequest folder = ReadLine("mount", "--account", "home", "--path", "/Documents");
 
         Assert.Equal("alice@cloud.example.com", Label(whole, "alice"));
-        Assert.Equal("\\cloud.example.com\\alice", Prefix(whole, "alice"));
+        Assert.Equal("\\cloud_example_com\\alice", Prefix(whole, "alice"));
         Assert.Equal("Documents", Label(folder, "alice"));
         Assert.Equal("/Documents", folder.RemotePath);
     }
@@ -279,7 +293,7 @@ public sealed class MountRequestTests
 
         Assert.Null(request.MountPoint);
         Assert.Equal("alice@cloud.example.com", Label(request, "alice"));
-        Assert.Equal("\\cloud.example.com\\alice", Prefix(request, "alice"));
+        Assert.Equal("\\cloud_example_com\\alice", Prefix(request, "alice"));
     }
 
     [Fact]

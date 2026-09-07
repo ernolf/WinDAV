@@ -320,7 +320,13 @@ internal sealed class MountRequest
             ? userId ?? ProductInfo.Slug
             : LastSegment(remotePath);
 
-        return $"\\{server.Host}\\{share}";
+        // Windows reads the zone of a network path off the server name, and a name with a dot
+        // in it is not the intranet: it lands in the internet zone, where the shell asks
+        // before it will move anything. The name is ours to choose and reaches the same mount
+        // whatever it is called, so the dots come out and the mount stays out of that zone.
+        // They come out as underscores, which a host name may not carry, so what stands in
+        // for a dot is still told apart from a dash the host had of its own.
+        return $"\\{server.Host.Replace('.', '_')}\\{share}";
     }
 
     private static string LastSegment(string path) => path[(path.LastIndexOf('/') + 1)..];

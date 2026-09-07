@@ -8,8 +8,8 @@ namespace WinDav.Fs.Tests;
 
 // A store held in memory, with the same seam a real provider has: paths with slashes, and
 // a ProviderException for everything that cannot be done. Only what this cut of the file
-// system reaches is implemented; the write half throws, so a test that reached it by
-// accident fails loudly instead of passing quietly.
+// system reaches is implemented; writing the contents of a file throws, so a test that
+// reached it by accident fails loudly instead of passing quietly.
 internal sealed class FakeStore : IStorageProvider
 {
     private readonly Dictionary<string, RemoteEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
@@ -155,23 +155,112 @@ internal sealed class FakeStore : IStorageProvider
         string? ifMatch,
         CancellationToken cancellationToken) => throw new NotSupportedException();
 
-    public Task CreateDirectoryAsync(string path, CancellationToken cancellationToken) =>
-        throw new NotSupportedException();
+    public Task CreateDirectoryAsync(string path, CancellationToken cancellationToken)
+    {
+        Fail();
 
-    public Task DeleteAsync(string path, CancellationToken cancellationToken) =>
-        throw new NotSupportedException();
+        if (_entries.ContainsKey(path))
+        {
+            throw new ProviderException(ProviderError.AlreadyExists);
+        }
+
+        if (!_entries.ContainsKey(ParentOf(path)))
+        {
+            throw new ProviderException(ProviderError.Conflict);
+        }
+
+        AddDirectory(path);
+
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteAsync(string path, CancellationToken cancellationToken)
+    {
+        Fail();
+
+        if (!_entries.ContainsKey(path))
+        {
+            throw new ProviderException(ProviderError.NotFound);
+        }
+
+        // With everything under it, the way one request on a directory goes out.
+        foreach (string key in Under(path))
+        {
+            _entries.Remove(key);
+            _content.Remove(key);
+        }
+
+        return Task.CompletedTask;
+    }
 
     public Task MoveAsync(
         string sourcePath,
         string destinationPath,
         bool overwrite,
-        CancellationToken cancellationToken) => throw new NotSupportedException();
+        CancellationToken cancellationToken)
+    {
+        Fail();
+
+        if (!_entries.ContainsKey(sourcePath))
+        {
+            throw new ProviderException(ProviderError.NotFound);
+        }
+
+        if (_entries.ContainsKey(destinationPath))
+        {
+            if (!overwrite)
+            {
+                throw new ProviderException(ProviderError.AlreadyExists);
+            }
+
+            _entries.Remove(destinationPath);
+            _content.Remove(destinationPath);
+        }
+
+        foreach (string key in Under(sourcePath))
+        {
+            RemoteEntry moved = _entries[key];
+            string path = destinationPath + key[sourcePath.Length..];
+
+            _entries.Remove(key);
+            _entries[path] = new RemoteEntry(path, moved.IsDirectory)
+            {
+                Length = moved.Length,
+                Permissions = moved.Permissions,
+                LastModified = moved.LastModified,
+            };
+
+            if (_content.Remove(key, out byte[]? bytes))
+            {
+                _content[path] = bytes;
+            }
+        }
+
+        return Task.CompletedTask;
+    }
 
     public Task CopyAsync(
         string sourcePath,
         string destinationPath,
         bool overwrite,
         CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    // What the store has at a path, or nothing, which is how a test asks whether an entry
+    // is there without going through the file system.
+    public RemoteEntry? At(string path) => _entries.GetValueOrDefault(path);
+
+    // An entry and everything below it.
+    private List<string> Under(string path)
+    {
+        string prefix = path.EndsWith('/') ? path : path + "/";
+
+        return
+        [
+            .. _entries.Keys.Where(key =>
+                string.Equals(key, path, StringComparison.OrdinalIgnoreCase)
+                || key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)),
+        ];
+    }
 
     private static string ParentOf(string path)
     {

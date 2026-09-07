@@ -72,10 +72,6 @@ public sealed class WinDavFileSystem : FileSystemBase
     private static readonly long s_fileTimeEpochTicks =
         new DateTime(1601, 1, 1, 0, 0, 0, DateTimeKind.Utc).Ticks;
 
-    // Cleared the first time WinFsp's native library turns out not to be there, so that
-    // finding it out is paid for once and not on every open.
-    private static bool s_winFspAnswers = true;
-
     private readonly IStorageProvider _provider;
 
     // The store of listings, where the handles open on a directory are counted. Null where
@@ -87,6 +83,10 @@ public sealed class WinDavFileSystem : FileSystemBase
     private readonly ReadLayer _reads;
     private readonly byte[] _security;
     private readonly ulong _mountTime = (ulong)DateTime.UtcNow.ToFileTimeUtc();
+
+    // Set while a mount is driving this file system, and read before anything is asked of
+    // WinFsp's native library.
+    private bool _mounted;
 
     // The mount's root, as the provider spells it: empty for the whole store, otherwise a
     // path with a leading and no trailing slash, so that a child is the root and the name
@@ -180,6 +180,19 @@ public sealed class WinDavFileSystem : FileSystemBase
         return STATUS_SUCCESS;
     }
 
+    // The two ends of a mount. Between them WinFsp carries requests in and stands behind
+    // them; outside them there is nothing of its to ask.
+    /// <inheritdoc/>
+    public override int Mounted(object host)
+    {
+        _mounted = true;
+
+        return STATUS_SUCCESS;
+    }
+
+    /// <inheritdoc/>
+    public override void Unmounted(object host) => _mounted = false;
+
     /// <inheritdoc/>
     public override int GetVolumeInfo(out VolumeInfo volumeInfo)
     {
@@ -252,6 +265,84 @@ public sealed class WinDavFileSystem : FileSystemBase
             {
                 _log.LogDebug(
                     "Asked about {Path} in {Elapsed} ms: {Reason}.",
+                    path,
+                    Elapsed(started),
+                    exception.Error);
+            }
+
+            return ProviderStatus.From(exception);
+        }
+    }
+
+    // A directory, and nothing else yet: a file comes into being by being written, and the
+    // writing is the rest of #36. Windows asks for both through this one call.
+    /// <inheritdoc/>
+    public override int Create(
+        string fileName,
+        uint createOptions,
+        uint grantedAccess,
+        uint fileAttributes,
+        byte[] securityDescriptor,
+        ulong allocationSize,
+        out object? fileNode,
+        out object? fileDesc,
+        out FileInfo fileInfo,
+        out string? normalizedName)
+    {
+        fileNode = null;
+        fileDesc = null;
+        fileInfo = default;
+        normalizedName = null;
+
+        if ((createOptions & FILE_DIRECTORY_FILE) == 0)
+        {
+            return Refused("Create of a file");
+        }
+
+        // Refused for the reason it is refused at Open, and for one more: a delete stated at
+        // the open is never offered to CanDelete, so the emptiness of the directory would go
+        // untested and the whole tree under it would go with the close.
+        if ((createOptions & FILE_DELETE_ON_CLOSE) != 0)
+        {
+            return Refused("Create with delete on close");
+        }
+
+        string path = ToRemotePath(fileName);
+        long started = Stopwatch.GetTimestamp();
+
+        try
+        {
+            Await(_provider.CreateDirectoryAsync(path));
+
+            // What the store answers to the making of a directory says nothing about it, and
+            // the handle being opened has to carry an entry. Asked for rather than made up:
+            // the times and what may be done with it are the store's to say, and this is the
+            // entry an Open a moment later would be given.
+            RemoteEntry entry = Await(_provider.GetAsync(path));
+
+            // The attributes, the descriptor and the size that were asked for are dropped. A
+            // directory in a store like this has nowhere to keep any of them, and the volume
+            // hands out one descriptor for everything it is asked about.
+            fileDesc = new OpenEntry(path, entry, _reads.Open(path, entry.Length));
+            fileInfo = ToFileInfo(entry);
+
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug("Created {Path} in {Elapsed} ms.", path, Elapsed(started));
+            }
+
+            // Entered here for the reason Open enters it: what comes back is an open handle,
+            // and Close leaves what either of the two put in.
+            _directories?.Handles.Enter(path);
+
+            return STATUS_SUCCESS;
+        }
+        catch (ProviderException exception)
+        {
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug(
+                    "Creating {Path} failed after {Elapsed} ms: {Reason}.",
                     path,
                     Elapsed(started),
                     exception.Error);
@@ -446,6 +537,96 @@ public sealed class WinDavFileSystem : FileSystemBase
         }
     }
 
+    // The half of a delete that has somewhere to put a refusal. The deletion itself falls
+    // due in Cleanup, which Windows gives no way to fail, so whatever can be tested is
+    // tested here. Also the answer to SetDelete, which WinFsp hands on to this.
+    /// <inheritdoc/>
+    public override int CanDelete(object? fileNode, object fileDesc, string fileName)
+    {
+        OpenEntry open = (OpenEntry)fileDesc;
+
+        if (!open.Entry.IsDirectory)
+        {
+            return STATUS_SUCCESS;
+        }
+
+        long started = Stopwatch.GetTimestamp();
+
+        try
+        {
+            // One request takes a directory with everything under it, and Windows empties a
+            // tree from the leaves up. A directory that still holds something is therefore
+            // one the caller does not know about, and it is answered the way NTFS answers.
+            List<RemoteEntry> children = ChildrenOf(open.Path, marker: null);
+
+            if (children.Count == 0)
+            {
+                return STATUS_SUCCESS;
+            }
+
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug(
+                    "Refused to delete {Path}: {Count} entries are still in it.",
+                    open.Path,
+                    children.Count);
+            }
+
+            return STATUS_DIRECTORY_NOT_EMPTY;
+        }
+        catch (ProviderException exception)
+        {
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug(
+                    "Asking what is in {Path} failed after {Elapsed} ms: {Reason}.",
+                    open.Path,
+                    Elapsed(started),
+                    exception.Error);
+            }
+
+            return ProviderStatus.From(exception);
+        }
+    }
+
+    // Where a delete happens, because Windows puts it here: an entry is opened, asked about
+    // through CanDelete, and taken away when the last handle to it goes. A failure of this
+    // call cannot be reported to anybody, which is a limitation of Windows and not of this
+    // program, so it is written down and that is all. It is what CanDelete is for.
+    //
+    // Reached for an entry that was written to and for one that is being deleted, because
+    // Init sets PostCleanupWhenModifiedOnly.
+    /// <inheritdoc/>
+    public override void Cleanup(object? fileNode, object fileDesc, string? fileName, uint flags)
+    {
+        if ((flags & CleanupDelete) == 0 || fileDesc is not OpenEntry open)
+        {
+            return;
+        }
+
+        long started = Stopwatch.GetTimestamp();
+
+        try
+        {
+            Await(_provider.DeleteAsync(open.Path));
+
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug("Deleted {Path} in {Elapsed} ms.", open.Path, Elapsed(started));
+            }
+        }
+        catch (ProviderException exception)
+        {
+            // Written at a level nobody has to switch on. Windows has told the person that
+            // the entry is gone, and this is the only place where the truth is kept.
+            _log.LogWarning(
+                "Deleting {Path} failed after {Elapsed} ms: {Reason}.",
+                open.Path,
+                Elapsed(started),
+                exception.Error);
+        }
+    }
+
     // The end of one handle. The window it read through belongs to the mount's ceiling and
     // has to go back, whether the file was read to the end or dropped after a kilobyte; a
     // directory is held by one handle fewer, which is what says whether anybody is still
@@ -461,6 +642,53 @@ public sealed class WinDavFileSystem : FileSystemBase
             {
                 _directories?.Handles.Leave(open.Path);
             }
+        }
+    }
+
+    // Moving an entry, which is also how it is renamed: where it is and what it is called
+    // are one and the same. What an open handle holds is left pointing at the name it was
+    // opened with, because the window it reads through and the count of who is standing in
+    // a directory were both taken out under that name and have to be given back under it.
+    /// <inheritdoc/>
+    public override int Rename(
+        object? fileNode,
+        object fileDesc,
+        string fileName,
+        string newFileName,
+        bool replaceIfExists)
+    {
+        string source = ToRemotePath(fileName);
+        string destination = ToRemotePath(newFileName);
+        long started = Stopwatch.GetTimestamp();
+
+        try
+        {
+            Await(_provider.MoveAsync(source, destination, replaceIfExists));
+
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug(
+                    "Moved {Path} to {Destination} in {Elapsed} ms.",
+                    source,
+                    destination,
+                    Elapsed(started));
+            }
+
+            return STATUS_SUCCESS;
+        }
+        catch (ProviderException exception)
+        {
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug(
+                    "Moving {Path} to {Destination} failed after {Elapsed} ms: {Reason}.",
+                    source,
+                    destination,
+                    Elapsed(started),
+                    exception.Error);
+            }
+
+            return ProviderStatus.From(exception);
         }
     }
 
@@ -553,32 +781,12 @@ public sealed class WinDavFileSystem : FileSystemBase
             : base.ExceptionHandler(exception);
     }
 
-    // == Everything that would change something ==
+    // == What is still turned away ==
     //
-    // All of it answers the one status Windows can phrase, so that a person is told the
-    // volume is read only instead of being shown a code. CreateEx and OverwriteEx are not
-    // among them: WinFsp passes them on to Create and Overwrite, which are here.
-
-    /// <inheritdoc/>
-    public override int Create(
-        string fileName,
-        uint createOptions,
-        uint grantedAccess,
-        uint fileAttributes,
-        byte[] securityDescriptor,
-        ulong allocationSize,
-        out object? fileNode,
-        out object? fileDesc,
-        out FileInfo fileInfo,
-        out string? normalizedName)
-    {
-        fileNode = null;
-        fileDesc = null;
-        fileInfo = default;
-        normalizedName = null;
-
-        return Refused(nameof(Create));
-    }
+    // The contents of a file and everything Windows would keep beside them. All of it
+    // answers the one status Windows can phrase, so that a person is told the volume will
+    // not take it instead of being shown a code. OverwriteEx is not among them: WinFsp
+    // passes it on to Overwrite, which is here.
 
     /// <inheritdoc/>
     public override int Overwrite(
@@ -641,19 +849,6 @@ public sealed class WinDavFileSystem : FileSystemBase
         return Refused(nameof(SetFileSize));
     }
 
-    // Also the answer to SetDelete, which WinFsp hands on to this.
-    /// <inheritdoc/>
-    public override int CanDelete(object? fileNode, object fileDesc, string fileName) =>
-        Refused(nameof(CanDelete));
-
-    /// <inheritdoc/>
-    public override int Rename(
-        object? fileNode,
-        object fileDesc,
-        string fileName,
-        string newFileName,
-        bool replaceIfExists) => Refused(nameof(Rename));
-
     /// <inheritdoc/>
     public override int SetSecurity(
         object? fileNode,
@@ -679,13 +874,13 @@ public sealed class WinDavFileSystem : FileSystemBase
     private static string Elapsed(long started) =>
         Stopwatch.GetElapsedTime(started).TotalMilliseconds.ToString(ElapsedFormat, CultureInfo.InvariantCulture);
 
-    // "The drive is read only" is the first thing a person asks about, and Windows' own
-    // wording for it names no operation, so the operation is named here.
+    // The status Windows has for a volume that will not take something, and its own wording
+    // for it names no operation, so the operation is named here.
     private int Refused(string operation)
     {
         if (_log.IsEnabled(LogLevel.Debug))
         {
-            _log.LogDebug("Refused {Operation}: everything on this volume is read only.", operation);
+            _log.LogDebug("Refused {Operation}: this volume does not take it.", operation);
         }
 
         return STATUS_MEDIA_WRITE_PROTECTED;
@@ -699,36 +894,14 @@ public sealed class WinDavFileSystem : FileSystemBase
     // has no way to call.
     private static TResult Await<TResult>(Task<TResult> task) => task.GetAwaiter().GetResult();
 
-    // The originating process is WinFsp's to answer, and it answers out of its native library.
-    // A file system that a mount drives always has that library, because the driver is what
-    // carried the request in. One built without a mount does not, and a report that names no
-    // process is a better answer there than a request that dies on its way out.
-    private static int ProcessId()
-    {
-        if (!s_winFspAnswers)
-        {
-            return 0;
-        }
+    private static void Await(Task task) => task.GetAwaiter().GetResult();
 
-        try
-        {
-            return GetOperationProcessId();
-        }
-        catch (DllNotFoundException)
-        {
-            s_winFspAnswers = false;
-
-            return 0;
-        }
-        catch (TypeInitializationException)
-        {
-            // The library is loaded from a static constructor, and one that failed keeps
-            // failing: the runtime hands every caller after the first the same exception.
-            s_winFspAnswers = false;
-
-            return 0;
-        }
-    }
+    // Who is doing this is WinFsp's to answer, out of its native library and only inside a
+    // request that library carried in. Asked outside a mount, the call is not an error that
+    // comes back: it reads an operation that is not there and takes the process with it,
+    // which is nothing .NET can catch. So it is put only while a mount is standing, and a
+    // report that names no process is the answer everywhere else.
+    private int ProcessId() => _mounted ? GetOperationProcessId() : 0;
 
     private static string NormaliseRoot(string remotePath)
     {
