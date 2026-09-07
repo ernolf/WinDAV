@@ -358,7 +358,182 @@ public sealed class WinDavFileSystemTests
     }
 
     [Fact]
-    public void EverythingThatWouldChangeSomethingSaysTheMediaIsWriteProtected()
+    public void WhatTheVolumeStillWillNotTakeSaysSoInWordsWindowsKnows()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        // A file comes into being by being written, and that is the rest of #36.
+        Assert.Equal(
+            Refused,
+            fileSystem.Create("\\new.txt", 0, 0, 0, [], 0, out _, out _, out _, out _));
+
+        Assert.Equal(Refused, fileSystem.Overwrite(null, fileDesc, 0, false, 0, out _));
+        Assert.Equal(Refused, fileSystem.Write(null, fileDesc, IntPtr.Zero, 0, 0, false, false, out _, out _));
+        Assert.Equal(Refused, fileSystem.SetBasicInfo(null, fileDesc, 0, 0, 0, 0, 0, out _));
+        Assert.Equal(Refused, fileSystem.SetFileSize(null, fileDesc, 0, false, out _));
+        Assert.Equal(Refused, fileSystem.SetSecurity(null, fileDesc, AccessControlSections.Access, []));
+        Assert.Equal(Refused, fileSystem.SetVolumeLabel("Anything", out _));
+    }
+
+    [Fact]
+    public void ADirectoryIsMadeAndComesBackOpen()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            Create(fileSystem, "\\photos", out object? fileDesc, out FileInfo fileInfo));
+
+        Assert.NotNull(fileDesc);
+        Assert.Equal((uint)FileAttributes.Directory, fileInfo.FileAttributes);
+
+        RemoteEntry? made = store.At("/photos");
+
+        Assert.NotNull(made);
+        Assert.True(made.IsDirectory);
+
+        // The handle is one WinFsp will close, so what a directory holds has to be enterable
+        // and leavable through it like any other.
+        fileSystem.Close(null, fileDesc);
+    }
+
+    [Fact]
+    public void ADirectoryThatIsAlreadyThereIsACollisionAndNotAFailure()
+    {
+        FakeStore store = new();
+        store.AddDirectory("/photos");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_OBJECT_NAME_COLLISION,
+            Create(fileSystem, "\\photos", out _, out _));
+    }
+
+    [Fact]
+    public void AskingToDeleteOnCloseIsRefusedAtTheCreateAsWell()
+    {
+        WinDavFileSystem fileSystem = Mount(new FakeStore());
+
+        // Nothing asks CanDelete about a file opened this way, so the one test a directory
+        // gets before it goes would be skipped.
+        Assert.Equal(
+            Refused,
+            fileSystem.Create(
+                "\\photos",
+                FileSystemBase.FILE_DIRECTORY_FILE | FileSystemBase.FILE_DELETE_ON_CLOSE,
+                0,
+                0,
+                [],
+                0,
+                out _,
+                out _,
+                out _,
+                out _));
+    }
+
+    [Fact]
+    public void AFileIsGoneWhenTheLastHandleToItGoes()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.CanDelete(null, fileDesc, "\\note.txt"));
+
+        fileSystem.Cleanup(null, fileDesc, "\\note.txt", FileSystemBase.CleanupDelete);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Null(store.At("/note.txt"));
+    }
+
+    [Fact]
+    public void ADirectoryWithSomethingInItIsNotDeleted()
+    {
+        FakeStore store = new();
+        store.AddDirectory("/photos");
+        store.AddFile("/photos/holiday.jpg", "picture");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\photos");
+
+        // One request would take the whole tree, and the caller asked about a directory it
+        // believes is empty.
+        Assert.Equal(
+            FileSystemBase.STATUS_DIRECTORY_NOT_EMPTY,
+            fileSystem.CanDelete(null, fileDesc, "\\photos"));
+
+        Assert.NotNull(store.At("/photos/holiday.jpg"));
+    }
+
+    [Fact]
+    public void ADirectoryWithNothingInItIsDeleted()
+    {
+        FakeStore store = new();
+        store.AddDirectory("/photos");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\photos");
+
+        Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.CanDelete(null, fileDesc, "\\photos"));
+
+        fileSystem.Cleanup(null, fileDesc, "\\photos", FileSystemBase.CleanupDelete);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Null(store.At("/photos"));
+    }
+
+    [Fact]
+    public void ACleanupThatIsNotADeleteTakesNothingAway()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        fileSystem.Cleanup(null, fileDesc, null, FileSystemBase.CleanupSetLastWriteTime);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.NotNull(store.At("/note.txt"));
+    }
+
+    [Fact]
+    public void ADeleteTheStoreRefusesGoesNoFurtherThanTheLog()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        store.FailWith = ProviderError.PermissionDenied;
+
+        // Windows has no way to hear this one, and a failure that leaves as an exception
+        // would take the mount with it.
+        fileSystem.Cleanup(null, fileDesc, "\\note.txt", FileSystemBase.CleanupDelete);
+
+        store.FailWith = null;
+
+        Assert.NotNull(store.At("/note.txt"));
+    }
+
+    [Fact]
+    public void ARenameMovesTheEntryInTheStore()
     {
         FakeStore store = new();
         store.AddFile("/note.txt", "hello");
@@ -368,17 +543,51 @@ public sealed class WinDavFileSystemTests
         object fileDesc = OpenExisting(fileSystem, "\\note.txt");
 
         Assert.Equal(
-            Refused,
-            fileSystem.Create("\\new.txt", 0, 0, 0, [], 0, out _, out _, out _, out _));
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.Rename(null, fileDesc, "\\note.txt", "\\other.txt", false));
 
-        Assert.Equal(Refused, fileSystem.Overwrite(null, fileDesc, 0, false, 0, out _));
-        Assert.Equal(Refused, fileSystem.Write(null, fileDesc, IntPtr.Zero, 0, 0, false, false, out _, out _));
-        Assert.Equal(Refused, fileSystem.SetBasicInfo(null, fileDesc, 0, 0, 0, 0, 0, out _));
-        Assert.Equal(Refused, fileSystem.SetFileSize(null, fileDesc, 0, false, out _));
-        Assert.Equal(Refused, fileSystem.CanDelete(null, fileDesc, "\\note.txt"));
-        Assert.Equal(Refused, fileSystem.Rename(null, fileDesc, "\\note.txt", "\\other.txt", false));
-        Assert.Equal(Refused, fileSystem.SetSecurity(null, fileDesc, AccessControlSections.Access, []));
-        Assert.Equal(Refused, fileSystem.SetVolumeLabel("Anything", out _));
+        Assert.Null(store.At("/note.txt"));
+        Assert.NotNull(store.At("/other.txt"));
+    }
+
+    [Fact]
+    public void ARenameOntoSomethingThatIsThereNeedsToBeAllowedTo()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+        store.AddFile("/other.txt", "there");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        Assert.Equal(
+            FileSystemBase.STATUS_OBJECT_NAME_COLLISION,
+            fileSystem.Rename(null, fileDesc, "\\note.txt", "\\other.txt", false));
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.Rename(null, fileDesc, "\\note.txt", "\\other.txt", true));
+
+        Assert.Null(store.At("/note.txt"));
+    }
+
+    [Fact]
+    public void ARenameUnderAMountedFolderStaysUnderIt()
+    {
+        FakeStore store = new();
+        store.AddDirectory("/photos");
+        store.AddFile("/photos/holiday.jpg", "picture");
+
+        WinDavFileSystem fileSystem = Mount(store, "/photos");
+
+        object fileDesc = OpenExisting(fileSystem, "\\holiday.jpg");
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.Rename(null, fileDesc, "\\holiday.jpg", "\\beach.jpg", false));
+
+        Assert.NotNull(store.At("/photos/beach.jpg"));
     }
 
     [Fact]
@@ -408,6 +617,25 @@ public sealed class WinDavFileSystemTests
         return new WinDavFileSystem(
             store,
             new MountSettings { RemotePath = remotePath, VolumeLabel = "Test" });
+    }
+
+    private static int Create(
+        WinDavFileSystem fileSystem,
+        string fileName,
+        out object? fileDesc,
+        out FileInfo fileInfo)
+    {
+        return fileSystem.Create(
+            fileName,
+            FileSystemBase.FILE_DIRECTORY_FILE,
+            0,
+            0,
+            [],
+            0,
+            out _,
+            out fileDesc,
+            out fileInfo,
+            out _);
     }
 
     private static object OpenExisting(WinDavFileSystem fileSystem, string fileName)
