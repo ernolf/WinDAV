@@ -494,6 +494,117 @@ public sealed class DirectoryCacheTests
     }
 
     [Fact]
+    public async Task ANameThisPutThereIsAskedForAgain()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/photos", "v2");
+        store.AddDirectory("/films", "v3");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings { Depth = 0, Probes = 2 });
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/desktop.ini", TestContext.Current.CancellationToken));
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/photos/desktop.ini", TestContext.Current.CancellationToken));
+
+        // The name Windows looks for in every directory is the one that burns, and the one a
+        // program then writes. What was put there is there, and the count taken before it was
+        // says nothing about it.
+        await cache.WriteAsync(
+            "/films/desktop.ini",
+            Stream.Null,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        RemoteEntry entry = await cache.GetAsync("/films/desktop.ini", TestContext.Current.CancellationToken);
+
+        Assert.Equal("/films/desktop.ini", entry.Path);
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music", "/photos", "/films"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ABurnedNameThatTurnsUpInAListingIsAskedForAgain()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/photos", "v2");
+        store.AddDirectory("/films", "v3");
+        store.AddFile("/films/desktop.ini");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings { Depth = 0, Probes = 2 });
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/desktop.ini", TestContext.Current.CancellationToken));
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/photos/desktop.ini", TestContext.Current.CancellationToken));
+
+        // Somebody opens the directory the name is in, and the listing settles it.
+        await cache.ListAsync("/films", TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            "/films/desktop.ini",
+            (await cache.GetAsync("/films/desktop.ini", TestContext.Current.CancellationToken)).Path);
+
+        // A write into that directory takes the listing away, which is what happens in the
+        // ordinary course of things. What is asked after it has to reach the store again
+        // rather than be answered out of a count that a listing has disproved.
+        await cache.WriteAsync(
+            "/films/notes.txt",
+            Stream.Null,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        RemoteEntry entry = await cache.GetAsync("/films/desktop.ini", TestContext.Current.CancellationToken);
+
+        Assert.Equal("/films/desktop.ini", entry.Path);
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music", "/photos", "/films", "/films"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ABurnedDirectoryThatWasListedIsAskedForAgain()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/photos", "v2");
+        store.AddDirectory("/films", "v3");
+        store.AddDirectory("/films/tmp", "v4");
+
+        DirectoryCache cache = Cache(store, new DirectorySettings { Depth = 0, Probes = 2 });
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/tmp", TestContext.Current.CancellationToken));
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/photos/tmp", TestContext.Current.CancellationToken));
+
+        // A directory can be opened without the one above it ever being listed, and then what
+        // says the name is there is the directory answering about itself.
+        await cache.ListAsync("/films/tmp", TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            "/films/tmp",
+            (await cache.GetAsync("/films/tmp", TestContext.Current.CancellationToken)).Path);
+
+        await cache.WriteAsync(
+            "/films/tmp/notes.txt",
+            Stream.Null,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        RemoteEntry entry = await cache.GetAsync("/films/tmp", TestContext.Current.CancellationToken);
+
+        Assert.Equal("/films/tmp", entry.Path);
+        Assert.True(entry.IsDirectory);
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music", "/photos", "/films/tmp", "/films"], store.Listed);
+    }
+
+    [Fact]
     public async Task AnAbsentNameIsCountedWithTheListingsItBought()
     {
         TreeStore store = new();

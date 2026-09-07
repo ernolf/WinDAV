@@ -101,7 +101,8 @@ public sealed class DirectoryCache : IStorageProvider
     // The directories a name was asked for in and not found in, and the names that have
     // reached the threshold. Ordinal for the reason the listings are ordinal: a store that
     // keeps case has two names where these differ. The directories of a name are let go of
-    // once it is burned, because nothing is counted about it after that.
+    // once it is burned, because nothing is counted about it after that, and both are let go
+    // of where the name turns up, which is the only way back out of a burn.
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _nowhere
         = new(StringComparer.Ordinal);
 
@@ -322,6 +323,8 @@ public sealed class DirectoryCache : IStorageProvider
 
             if (listing.Self is RemoteEntry self)
             {
+                Appeared(path);
+
                 return self;
             }
         }
@@ -363,6 +366,8 @@ public sealed class DirectoryCache : IStorageProvider
 
             if (Find(listing.Entries, path) is RemoteEntry entry)
             {
+                Appeared(path);
+
                 return entry;
             }
 
@@ -401,6 +406,7 @@ public sealed class DirectoryCache : IStorageProvider
             // The directory this is in shows a length and a time that have just changed, and
             // a file that was not there before is in it now.
             ForgetParent(path);
+            Appeared(path);
         }
     }
 
@@ -416,6 +422,7 @@ public sealed class DirectoryCache : IStorageProvider
         finally
         {
             ForgetParent(path);
+            Appeared(path);
         }
     }
 
@@ -456,6 +463,7 @@ public sealed class DirectoryCache : IStorageProvider
             ForgetTree(destinationPath);
             ForgetParent(sourcePath);
             ForgetParent(destinationPath);
+            Appeared(destinationPath);
         }
     }
 
@@ -479,6 +487,7 @@ public sealed class DirectoryCache : IStorageProvider
             // A copy leaves the source as it was; what is at the destination is new.
             ForgetTree(destinationPath);
             ForgetParent(destinationPath);
+            Appeared(destinationPath);
         }
     }
 
@@ -730,6 +739,19 @@ public sealed class DirectoryCache : IStorageProvider
         }
 
         _burned[name] = 0;
+        _nowhere.TryRemove(name, out _);
+    }
+
+    // The name is there, so what was counted about it is about nothing any more. A burn is
+    // taken from the directories a name was not in, and one directory it is in ends it: the
+    // count goes rather than sinks, because no number of earlier misses says that a file
+    // which is there is not. What Absences() reports is left as it stands: those answers were
+    // given, and they cost what they cost.
+    private void Appeared(string path)
+    {
+        string name = NameOf(path);
+
+        _burned.TryRemove(name, out _);
         _nowhere.TryRemove(name, out _);
     }
 
