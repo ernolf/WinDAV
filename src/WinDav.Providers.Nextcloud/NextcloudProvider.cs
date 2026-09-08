@@ -24,8 +24,8 @@ namespace WinDav.Providers.Nextcloud;
 /// </para>
 /// <para>
 /// The chunked path is used only when it can be used safely; see
-/// <see cref="WriteAsync(string, Stream, string?, CancellationToken)"/> for the three cases
-/// that fall back to a single PUT.
+/// <see cref="WriteAsync(string, Stream, string?, EntryTimes, CancellationToken)"/> for the
+/// three cases that fall back to a single PUT.
 /// </para>
 /// <para>
 /// The other thing it adds is the two properties of the vendor namespaces that the seam has
@@ -67,6 +67,17 @@ public sealed class NextcloudProvider : DavStorageProvider
     // The size of the whole file, which is what a quota can be checked against. Without it
     // an upload over quota is only refused when the chunks are assembled.
     private const string TotalLengthHeader = "OC-Total-Length";
+
+    // The two times the server takes on the request that writes the file, so that setting
+    // them costs no request of its own. Both are unix timestamps in seconds.
+    private const string ModifiedHeader = "X-OC-MTime";
+
+    private const string CreatedHeader = "X-OC-CTime";
+
+    // The server refuses a timestamp inside the first day after 1970 as a value that cannot
+    // be meant, whichever time zone it is read in, and the refusal arrives after the file
+    // has been written. Nothing older than this is sent.
+    private const long EarliestTimestamp = 24 * 60 * 60;
 
     // The properties every PROPFIND asks for: the five of RFC 4918 the seam reads, the
     // creation date, and the two of the vendor namespaces.
@@ -189,22 +200,32 @@ public sealed class NextcloudProvider : DavStorageProvider
     /// <param name="path">Where the file goes.</param>
     /// <param name="content">The bytes to write.</param>
     /// <param name="ifMatch">See <see cref="DavStorageProvider.WriteAsync"/>.</param>
+    /// <param name="times">See <see cref="DavStorageProvider.WriteAsync"/>.</param>
     /// <param name="cancellationToken">Cancels the upload and clears up after it.</param>
     /// <returns>
     /// The entity tag when the server stated one. A chunked upload has none: the answer that
     /// carries it belongs to the assembling MOVE, and the server is not obliged to send one.
     /// </returns>
     /// <remarks>
+    /// <para>
     /// Three cases go out as a single PUT instead. A stream that cannot be measured has no
     /// total length to declare, and the server needs one. A file no larger than one chunk
     /// would be a PUT with three extra requests around it. And an <paramref name="ifMatch"/>
     /// has nowhere to go in the chunked exchange, so honouring it would mean dropping it,
     /// which turns a guarded write into a lost update.
+    /// </para>
+    /// <para>
+    /// The times ride on the request that writes the file, which is the PUT here and the
+    /// assembling MOVE on the chunked path, so they cost nothing. The server sets them
+    /// before it works out the entity tag it answers with, so unlike the PROPPATCH the base
+    /// class would send, this leaves the tag good.
+    /// </para>
     /// </remarks>
     public override async Task<string?> WriteAsync(
         string path,
         Stream content,
         string? ifMatch = null,
+        EntryTimes times = default,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -213,10 +234,10 @@ public sealed class NextcloudProvider : DavStorageProvider
 
         if (ifMatch is not null || length is null || length.Value <= _chunkSize)
         {
-            return await base.WriteAsync(path, content, ifMatch, cancellationToken).ConfigureAwait(false);
+            return await PutAsync(path, content, ifMatch, times, cancellationToken).ConfigureAwait(false);
         }
 
-        await UploadInChunksAsync(path, content, length.Value, cancellationToken).ConfigureAwait(false);
+        await UploadInChunksAsync(path, content, length.Value, times, cancellationToken).ConfigureAwait(false);
 
         return null;
     }
@@ -290,7 +311,95 @@ public sealed class NextcloudProvider : DavStorageProvider
         return permissions;
     }
 
-    private async Task UploadInChunksAsync(string path, Stream content, long length, CancellationToken cancellationToken)
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The modification time is added to what the base class names. The server takes it
+    /// under <c>DAV:lastmodified</c>, which is not the protocol's protected
+    /// <c>DAV:getlastmodified</c> but a name of its own; see
+    /// <see cref="NextcloudNames.LastModified"/>. This is the way in for a directory and for
+    /// an entry whose times are set without its contents being written, where there is no
+    /// upload for a header to ride on.
+    /// </remarks>
+    protected override IEnumerable<KeyValuePair<XName, string>> TimeProperties(EntryTimes times)
+    {
+        foreach (KeyValuePair<XName, string> property in base.TimeProperties(times))
+        {
+            yield return property;
+        }
+
+        if (Timestamp(times.LastModified) is string modified)
+        {
+            yield return new(NextcloudNames.LastModified, modified);
+        }
+    }
+
+    // The seconds since 1970 the server wants, or nothing where the time is absent or lies
+    // in the stretch it refuses.
+    private static string? Timestamp(DateTimeOffset? time)
+    {
+        if (time is not DateTimeOffset value)
+        {
+            return null;
+        }
+
+        long seconds = value.ToUnixTimeSeconds();
+
+        return seconds > EarliestTimestamp ? seconds.ToString(CultureInfo.InvariantCulture) : null;
+    }
+
+    // The times as the headers the server reads them from, and an empty list where there is
+    // nothing it would take.
+    private static KeyValuePair<string, string>[] TimeHeaders(EntryTimes times)
+    {
+        List<KeyValuePair<string, string>> headers = [];
+
+        if (Timestamp(times.LastModified) is string modified)
+        {
+            headers.Add(new(ModifiedHeader, modified));
+        }
+
+        if (Timestamp(times.Created) is string created)
+        {
+            headers.Add(new(CreatedHeader, created));
+        }
+
+        return [.. headers];
+    }
+
+    private async Task<string?> PutAsync(
+        string path,
+        Stream content,
+        string? ifMatch,
+        EntryTimes times,
+        CancellationToken cancellationToken)
+    {
+        Uri uri = DavPath.ToUri(BaseUri, path);
+        KeyValuePair<string, string>[] headers = TimeHeaders(times);
+
+        try
+        {
+            return await Client
+                .PutAsync(
+                    uri,
+                    content,
+                    contentType: null,
+                    ifMatch,
+                    headers: headers.Length == 0 ? null : headers,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw Failed($"Writing {DavPath.Normalise(path)}", exception);
+        }
+    }
+
+    private async Task UploadInChunksAsync(
+        string path,
+        Stream content,
+        long length,
+        EntryTimes times,
+        CancellationToken cancellationToken)
     {
         Uri target = DavPath.ToUri(BaseUri, path);
         Uri folder = new(_uploads, $"windav-{Guid.NewGuid()}/");
@@ -310,13 +419,15 @@ public sealed class NextcloudProvider : DavStorageProvider
             await SendChunksAsync(content, folder, length, chunkSize, headers, cancellationToken).ConfigureAwait(false);
 
             // MOVE carries the destination as a parameter of its own, so only the length
-            // goes in here; passing it twice would send the header twice.
+            // goes in here; passing it twice would send the header twice. The times go here
+            // too and nowhere earlier: the server reads them off the request that writes the
+            // file, and on this path that is the assembly and not any of the chunks.
             await Client
                 .MoveAsync(
                     new Uri(folder, AssembledName),
                     target,
                     overwrite: true,
-                    [new(TotalLengthHeader, total)],
+                    [new(TotalLengthHeader, total), .. TimeHeaders(times)],
                     cancellationToken)
                 .ConfigureAwait(false);
         }

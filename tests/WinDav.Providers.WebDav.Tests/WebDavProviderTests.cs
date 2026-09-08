@@ -51,6 +51,34 @@ public sealed class WebDavProviderTests
         </d:multistatus>
         """;
 
+    // What a server answers a PROPPATCH it carried out with.
+    private const string Written = """
+        <?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/remote.php/dav/files/ernolf/a%20note.txt</d:href>
+            <d:propstat>
+              <d:prop><d:creationdate/></d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+        </d:multistatus>
+        """;
+
+    // And one it will not: the property is named back with the status that turned it down.
+    private const string Refused = """
+        <?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/remote.php/dav/files/ernolf/a%20note.txt</d:href>
+            <d:propstat>
+              <d:prop><d:creationdate/></d:prop>
+              <d:status>HTTP/1.1 403 Forbidden</d:status>
+            </d:propstat>
+          </d:response>
+        </d:multistatus>
+        """;
+
     // What RFC 4331 adds, on the collection the two properties belong to.
     private const string Quota = """
         <?xml version="1.0"?>
@@ -377,12 +405,112 @@ public sealed class WebDavProviderTests
         using MemoryStream content = new(Encoding.UTF8.GetBytes(Bytes));
 
         string? etag = await Provider(httpClient)
-            .WriteAsync("/a note.txt", content, "\"abc123\"", TestContext.Current.CancellationToken);
+            .WriteAsync("/a note.txt", content, "\"abc123\"", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("PUT", handler.Method);
         Assert.Equal("\"abc123\"", handler.IfMatch);
         Assert.Equal("\"def456\"", etag);
         Assert.Equal(Bytes, handler.Body);
+    }
+
+    [Fact]
+    public async Task WriteAsyncFollowsTheUploadWithTheCreationDate()
+    {
+        ScriptedHandler handler = new(
+            new HttpResponseMessage(HttpStatusCode.NoContent)
+            {
+                Headers = { ETag = new EntityTagHeaderValue("\"def456\"") },
+            },
+            MultiStatus(Written));
+
+        using HttpClient httpClient = new(handler);
+        using MemoryStream content = new(Encoding.UTF8.GetBytes(Bytes));
+
+        DateTimeOffset created = new(2026, 8, 24, 10, 10, 0, TimeSpan.Zero);
+
+        string? etag = await Provider(httpClient).WriteAsync(
+            "/a note.txt",
+            content,
+            times: new EntryTimes(created, null),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        string[] expected = ["PUT", "PROPPATCH"];
+
+        Assert.Equal(expected, handler.Methods);
+        Assert.Contains("<creationdate>2026-08-24T10:10:00.0000000Z</creationdate>", handler.Bodies[1], StringComparison.Ordinal);
+        Assert.StartsWith("<?xml version=\"1.0\" encoding=\"utf-8\"?><propertyupdate xmlns=\"DAV:\">", handler.Bodies[1], StringComparison.Ordinal);
+
+        // The file was changed after the server named that tag, so it is no longer the tag
+        // of what is there now.
+        Assert.Null(etag);
+    }
+
+    [Fact]
+    public async Task AModificationTimeAloneIsWorthNoRequest()
+    {
+        ScriptedHandler handler = new();
+
+        using HttpClient httpClient = new(handler);
+
+        // RFC 4918 protects DAV:getlastmodified, and a server that follows it refuses to
+        // have one written. There is nothing in the protocol to send, so nothing is sent.
+        await Provider(httpClient).SetTimesAsync(
+            "/a note.txt",
+            new EntryTimes(null, DateTimeOffset.UtcNow),
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(handler.Methods);
+    }
+
+    [Fact]
+    public async Task NoTimeAtAllIsWorthNoRequestEither()
+    {
+        ScriptedHandler handler = new();
+
+        using HttpClient httpClient = new(handler);
+
+        await Provider(httpClient).SetTimesAsync(
+            "/a note.txt",
+            default,
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(handler.Methods);
+    }
+
+    [Fact]
+    public async Task AServerThatWillNotHaveItsTimesWrittenIsOnlyAskedOnce()
+    {
+        ScriptedHandler handler = new(MultiStatus(Refused), MultiStatus(Refused));
+
+        using HttpClient httpClient = new(handler);
+
+        WebDavProvider provider = Provider(httpClient);
+        EntryTimes times = new(new DateTimeOffset(2026, 8, 24, 10, 10, 0, TimeSpan.Zero), null);
+
+        await provider.SetTimesAsync("/a note.txt", times, TestContext.Current.CancellationToken);
+        await provider.SetTimesAsync("/a note.txt", times, TestContext.Current.CancellationToken);
+
+        // The refusal is about the server and not about the entry, so asking again would
+        // buy the same answer and one more round trip on every file of a copy.
+        string[] expected = ["PROPPATCH"];
+
+        Assert.Equal(expected, handler.Methods);
+    }
+
+    [Fact]
+    public async Task ATimeSetOnSomethingThatIsNotThereSaysSo()
+    {
+        ScriptedHandler handler = new(new HttpResponseMessage(HttpStatusCode.NotFound));
+
+        using HttpClient httpClient = new(handler);
+
+        ProviderException exception = await Assert.ThrowsAsync<ProviderException>(
+            () => Provider(httpClient).SetTimesAsync(
+                "/a note.txt",
+                new EntryTimes(DateTimeOffset.UtcNow, null),
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(ProviderError.NotFound, exception.Error);
     }
 
     [Fact]
@@ -456,7 +584,7 @@ public sealed class WebDavProviderTests
         using MemoryStream content = new(Encoding.UTF8.GetBytes(Bytes));
 
         ProviderException exception = await Assert.ThrowsAsync<ProviderException>(
-            () => Provider(httpClient).WriteAsync("/a note.txt", content, "\"abc123\"", TestContext.Current.CancellationToken));
+            () => Provider(httpClient).WriteAsync("/a note.txt", content, "\"abc123\"", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(ProviderError.PreconditionFailed, exception.Error);
     }
@@ -579,6 +707,45 @@ public sealed class WebDavProviderTests
             if (disposing)
             {
                 _response.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+
+    // One answer per request, in the order they were given. A PROPPATCH is a second
+    // request behind a first, and what matters is that both went out and what each carried.
+    private sealed class ScriptedHandler : HttpMessageHandler
+    {
+        private readonly Queue<HttpResponseMessage> _answers;
+
+        public ScriptedHandler(params HttpResponseMessage[] answers)
+        {
+            _answers = new Queue<HttpResponseMessage>(answers);
+        }
+
+        public List<string> Methods { get; } = [];
+
+        public List<string> Bodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Methods.Add(request.Method.Method);
+            Bodies.Add(request.Content is null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false));
+
+            return _answers.Dequeue();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                foreach (HttpResponseMessage answer in _answers)
+                {
+                    answer.Dispose();
+                }
             }
 
             base.Dispose(disposing);

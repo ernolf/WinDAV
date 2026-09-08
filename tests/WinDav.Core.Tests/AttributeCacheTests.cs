@@ -439,11 +439,19 @@ public sealed class AttributeCacheTests
             string path,
             Stream content,
             string? ifMatch = null,
+            EntryTimes times = default,
             CancellationToken cancellationToken = default)
         {
             _paths.Add(path);
 
             return Task.FromResult<string?>(null);
+        }
+
+        public Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken = default)
+        {
+            _paths.Add(path);
+
+            return Task.CompletedTask;
         }
 
         public Task CreateDirectoryAsync(string path, CancellationToken cancellationToken = default)

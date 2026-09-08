@@ -393,13 +393,14 @@ public sealed class DirectoryCache : IStorageProvider
         string path,
         Stream content,
         string? ifMatch = null,
+        EntryTimes times = default,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(path);
 
         try
         {
-            return await _inner.WriteAsync(path, content, ifMatch, cancellationToken).ConfigureAwait(false);
+            return await _inner.WriteAsync(path, content, ifMatch, times, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -407,6 +408,25 @@ public sealed class DirectoryCache : IStorageProvider
             // a file that was not there before is in it now.
             ForgetParent(path);
             Appeared(path);
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        try
+        {
+            await _inner.SetTimesAsync(path, times, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // The listing carries the time of every entry in it, so the one that was just
+            // set is now wrong wherever it is written down. Nothing is said here about the
+            // name being there: unlike a write, this creates nothing, and it is also how a
+            // request against a path that is gone ends up.
+            ForgetParent(path);
         }
     }
 

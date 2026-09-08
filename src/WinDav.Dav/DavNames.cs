@@ -37,6 +37,16 @@ public static class DavNames
     /// <summary>The <c>DAV:propfind</c> element, root of a PROPFIND request body.</summary>
     public static readonly XName PropFind = Namespace + "propfind";
 
+    /// <summary>
+    /// The <c>DAV:propertyupdate</c> element, root of a PROPPATCH request body.
+    /// </summary>
+    public static readonly XName PropertyUpdate = Namespace + "propertyupdate";
+
+    /// <summary>
+    /// The <c>DAV:set</c> element of a PROPPATCH, holding the properties to write.
+    /// </summary>
+    public static readonly XName Set = Namespace + "set";
+
     /// <summary>The <c>DAV:allprop</c> element, asking for every property the server has.</summary>
     public static readonly XName AllProp = Namespace + "allprop";
 

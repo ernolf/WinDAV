@@ -167,17 +167,33 @@ public sealed class AttributeCache : IStorageProvider
         string path,
         Stream content,
         string? ifMatch = null,
+        EntryTimes times = default,
         CancellationToken cancellationToken = default)
     {
         try
         {
-            return await _inner.WriteAsync(path, content, ifMatch, cancellationToken)
+            return await _inner.WriteAsync(path, content, ifMatch, times, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
         {
             // Also when it failed: a write that reached the server and then broke off has
             // left something there whose length nobody here knows.
+            Forget(path);
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await _inner.SetTimesAsync(path, times, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // The times are part of what is remembered here, and the store may have taken
+            // something other than what it was given, or nothing at all.
             Forget(path);
         }
     }

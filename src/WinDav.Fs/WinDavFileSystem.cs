@@ -955,10 +955,17 @@ public sealed class WinDavFileSystem : FileSystemBase
         return STATUS_SUCCESS;
     }
 
-    // Taken and kept nowhere. Windows sets the times on a file it has just copied, and this
-    // handle has nowhere to put them: the modification time travels with the upload and the
-    // creation time is a property of its own, which is the rest of #36. Refusing here would
-    // fail a copy that has otherwise gone through.
+    // The times Windows sets on a file it has just copied. Where the file is still on its
+    // way out, they are kept on the handle and travel with it, which costs nothing; where
+    // there is nothing left to send, or the entry is a directory, they go on their own.
+    //
+    // The attributes are not among them. A store like this holds none of what the bits say,
+    // and a handle has nowhere to keep them either, so they are taken and dropped rather
+    // than refused: read-only is a matter of the permissions the store names, and the rest
+    // is Windows bookkeeping about a local file.
+    //
+    // Nothing here fails the call. A time is worth less than the file it belongs to, and a
+    // copy that has otherwise gone through must not be reported as failed over one.
     /// <inheritdoc/>
     public override int SetBasicInfo(
         object? fileNode,
@@ -970,7 +977,29 @@ public sealed class WinDavFileSystem : FileSystemBase
         ulong changeTime,
         out FileInfo fileInfo)
     {
-        fileInfo = FileInfoOf((OpenEntry)fileDesc);
+        OpenEntry open = (OpenEntry)fileDesc;
+
+        // The access time is not kept: nothing on the other side has a place for it, and
+        // writing it down here would show a file as touched by the act of reading the
+        // listing it is in. The change time is the time of the metadata and not of the
+        // contents, which is the modification time and is asked for separately.
+        EntryTimes asked = new(FromFileTime(creationTime), FromFileTime(lastWriteTime));
+
+        if (!asked.IsEmpty)
+        {
+            // What was named replaces what was named before, and what was left out leaves
+            // the earlier half of an answer standing.
+            open.Times = new(
+                asked.Created ?? open.Times.Created,
+                asked.LastModified ?? open.Times.LastModified);
+
+            if (open.Stage is not WriteStage { Pending: true })
+            {
+                SetTimes(open);
+            }
+        }
+
+        fileInfo = FileInfoOf(open);
 
         return STATUS_SUCCESS;
     }
@@ -1127,6 +1156,25 @@ public sealed class WinDavFileSystem : FileSystemBase
         return ticks < 0 ? fallback : (ulong)ticks;
     }
 
+    // The inverse, and the two answers it will not give. A zero is Windows saying it has
+    // not touched this time, and the all-ones is it saying it will not touch it again for
+    // the life of the handle. Both are silence, and silence is not a date to write anywhere.
+    private static DateTimeOffset? FromFileTime(ulong time)
+    {
+        if (time is 0 or ulong.MaxValue)
+        {
+            return null;
+        }
+
+        long ticks = s_fileTimeEpochTicks + (long)time;
+
+        // Past what a date holds on this side. Windows has no business sending one, and
+        // taking it would fail the call over a value nobody meant.
+        return ticks < 0 || ticks > DateTime.MaxValue.Ticks
+            ? null
+            : new DateTimeOffset(ticks, TimeSpan.Zero);
+    }
+
     private StorageSpace SpaceOfTheVolume()
     {
         try
@@ -1226,7 +1274,10 @@ public sealed class WinDavFileSystem : FileSystemBase
         long started = Stopwatch.GetTimestamp();
         long length = stage.Length;
 
-        stage.Delivered(Await(_provider.WriteAsync(open.Path, stage.Rewound(), stage.ETag)));
+        // The times go with every upload from this handle and are not cleared once they
+        // have gone. A program that has set a time has said what the file is to carry, and
+        // an upload that left them out would put the time of the upload there instead.
+        stage.Delivered(Await(_provider.WriteAsync(open.Path, stage.Rewound(), stage.ETag, open.Times)));
 
         if (_log.IsEnabled(LogLevel.Debug))
         {
@@ -1238,9 +1289,40 @@ public sealed class WinDavFileSystem : FileSystemBase
         }
     }
 
+    // The times on their own, for a handle with nothing left to send. A store that will not
+    // set them says so by doing nothing, so the only thing that arrives here is a store that
+    // tried and could not, and that is written down and gone no further with.
+    private void SetTimes(OpenEntry open)
+    {
+        long started = Stopwatch.GetTimestamp();
+
+        try
+        {
+            Await(_provider.SetTimesAsync(open.Path, open.Times));
+        }
+        catch (ProviderException exception)
+        {
+            if (_log.IsEnabled(LogLevel.Warning))
+            {
+                _log.LogWarning(
+                    "Setting the times on {Path} failed after {Elapsed} ms: {Reason}.",
+                    open.Path,
+                    Elapsed(started),
+                    exception.Error);
+            }
+
+            return;
+        }
+
+        if (_log.IsEnabled(LogLevel.Debug))
+        {
+            _log.LogDebug("Set the times on {Path} in {Elapsed} ms.", open.Path, Elapsed(started));
+        }
+    }
+
     // What the handle looks like now: what the store said when it was opened, with the length
-    // it has been written to on this side, which is the only part of it a write changes before
-    // the upload.
+    // it has been written to on this side and the times that have been set on it, which are
+    // the only parts of it a write changes before the upload.
     private FileInfo FileInfoOf(OpenEntry open)
     {
         FileInfo info = ToFileInfo(open.Entry);
@@ -1249,6 +1331,22 @@ public sealed class WinDavFileSystem : FileSystemBase
         {
             info.FileSize = (ulong)stage.Length;
             info.AllocationSize = AllocationSizeOf(info.FileSize);
+        }
+
+        // Answered from the handle rather than from the store: whoever set a time is
+        // entitled to read it back, whether or not the store has it yet, and whether or not
+        // the store will ever have it.
+        if (open.Times.Created is DateTimeOffset created)
+        {
+            info.CreationTime = ToFileTime(created, info.CreationTime);
+        }
+
+        if (open.Times.LastModified is DateTimeOffset modified)
+        {
+            ulong written = ToFileTime(modified, info.LastWriteTime);
+
+            info.LastWriteTime = written;
+            info.ChangeTime = written;
         }
 
         return info;
@@ -1299,6 +1397,11 @@ public sealed class WinDavFileSystem : FileSystemBase
         // entry was just made and where it was opened to be replaced; it is what says that a
         // write to part of the file has nothing to fetch first.
         public bool Emptied { get; set; }
+
+        // What has been set on this handle and is to be true of the entry, which is empty
+        // until somebody says otherwise. Windows sets the times of a copied file on the
+        // handle it copied it through, and this is where they wait for the upload.
+        public EntryTimes Times { get; set; }
     }
 
     // One walk through one directory listing, kept between calls to ReadDirectoryEntry.

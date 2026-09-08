@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 using System.Xml.Linq;
+using WinDav.Dav;
 
 namespace WinDav.Providers.Nextcloud;
 
@@ -39,4 +40,16 @@ public static class NextcloudNames
     /// entry.
     /// </summary>
     public static readonly XName Permissions = OwncloudNamespace + "permissions";
+
+    /// <summary>
+    /// The <c>DAV:lastmodified</c> property, a unix timestamp, which the server accepts in
+    /// a PROPPATCH and sets the modification time from.
+    /// </summary>
+    /// <remarks>
+    /// It is in the <c>DAV:</c> namespace and it is not in RFC 4918, which is why it is
+    /// named here and not in <see cref="DavNames"/>. The protocol's own
+    /// <c>DAV:getlastmodified</c> is protected and the server refuses it; this is the name
+    /// it takes instead, inherited from ownCloud along with the rest.
+    /// </remarks>
+    public static readonly XName LastModified = DavNames.Namespace + "lastmodified";
 }

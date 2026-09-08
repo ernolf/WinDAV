@@ -19,6 +19,11 @@ public sealed class WinDavFileSystemTests
 {
     private const int Refused = FileSystemBase.STATUS_MEDIA_WRITE_PROTECTED;
 
+    // Two dates far enough apart to tell which of them ended up where.
+    private static readonly DateTimeOffset s_created = new(2024, 5, 6, 7, 8, 9, TimeSpan.Zero);
+
+    private static readonly DateTimeOffset s_modified = new(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
+
     [Fact]
     public void AStoreThatSaysNothingAboutItsRoomNamesASizeWithNothingInUse()
     {
@@ -594,7 +599,35 @@ public sealed class WinDavFileSystemTests
     }
 
     [Fact]
-    public void TheTimesWindowsSetsOnACopyAreTakenAndKeptNowhere()
+    public void TheTimesWindowsSetsOnACopyTravelWithIt()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, "\\new.txt", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        WriteAt(fileSystem, fileDesc, 0, "hello");
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.SetBasicInfo(null, fileDesc, 0, FileTime(s_created), 0, FileTime(s_modified), 0, out _));
+
+        fileSystem.Cleanup(null, fileDesc, "\\new.txt", 0);
+        fileSystem.Close(null, fileDesc);
+
+        // On the upload and nowhere else: a request of their own would be one more round
+        // trip for every file of a copy.
+        Assert.Equal(new EntryTimes(s_created, s_modified), Assert.Single(store.Writes).Times);
+        Assert.Empty(store.TimesSet);
+    }
+
+    [Fact]
+    public void TheTimesGoOnTheirOwnWhereThereIsNothingLeftToSend()
     {
         FakeStore store = new();
         store.AddFile("/note.txt", "hello");
@@ -603,10 +636,95 @@ public sealed class WinDavFileSystemTests
 
         object fileDesc = OpenExisting(fileSystem, "\\note.txt");
 
-        // Refusing this would fail a copy that has otherwise gone through.
         Assert.Equal(
             FileSystemBase.STATUS_SUCCESS,
-            fileSystem.SetBasicInfo(null, fileDesc, 0, 1, 1, 1, 1, out _));
+            fileSystem.SetBasicInfo(null, fileDesc, 0, FileTime(s_created), 0, FileTime(s_modified), 0, out _));
+
+        Assert.Equal(new EntryTimes(s_created, s_modified), Assert.Single(store.TimesSet).Times);
+        Assert.Empty(store.Writes);
+    }
+
+    [Fact]
+    public void ATimeWindowsDidNotNameIsNotSet()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        // A zero is Windows saying it has not touched the time, and the all-ones is it
+        // saying it will not touch it again. Neither is a date, and a call carrying nothing
+        // but those two is a call with nothing to do.
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.SetBasicInfo(null, fileDesc, 0, 0, ulong.MaxValue, ulong.MaxValue, 0, out _));
+
+        Assert.Empty(store.TimesSet);
+    }
+
+    [Fact]
+    public void HalfATimeLeavesTheOtherHalfAsItWas()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        fileSystem.SetBasicInfo(null, fileDesc, 0, FileTime(s_created), 0, 0, 0, out _);
+        fileSystem.SetBasicInfo(null, fileDesc, 0, 0, 0, FileTime(s_modified), 0, out _);
+
+        Assert.Equal(new EntryTimes(s_created, null), store.TimesSet[0].Times);
+        Assert.Equal(new EntryTimes(s_created, s_modified), store.TimesSet[1].Times);
+    }
+
+    [Fact]
+    public void WhatWasSetIsWhatTheHandleAnswersWith()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.SetBasicInfo(
+                null,
+                fileDesc,
+                0,
+                FileTime(s_created),
+                0,
+                FileTime(s_modified),
+                0,
+                out FileInfo info));
+
+        Assert.Equal(FileTime(s_created), info.CreationTime);
+        Assert.Equal(FileTime(s_modified), info.LastWriteTime);
+        Assert.Equal(FileTime(s_modified), info.ChangeTime);
+    }
+
+    [Fact]
+    public void ATimeTheStoreWillNotTakeDoesNotFailTheCall()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        store.FailWith = ProviderError.PermissionDenied;
+
+        // A time is worth less than the file it belongs to, and this is the last call of a
+        // copy that has otherwise gone through.
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.SetBasicInfo(null, fileDesc, 0, FileTime(s_created), 0, FileTime(s_modified), 0, out _));
     }
 
     [Fact]
@@ -859,6 +977,9 @@ public sealed class WinDavFileSystemTests
             FileSystemBase.STATUS_ACCESS_DENIED,
             fileSystem.ExceptionHandler(new ProviderException(ProviderError.PermissionDenied)));
     }
+
+    // A date as Windows hands it over, which is what a file time is.
+    private static ulong FileTime(DateTimeOffset time) => (ulong)time.UtcDateTime.ToFileTimeUtc();
 
     private static WinDavFileSystem Mount(FakeStore store, string remotePath = "/")
     {
