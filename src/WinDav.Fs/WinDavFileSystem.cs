@@ -20,7 +20,8 @@ namespace WinDav.Fs;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Everything here is read. Every operation that would change something answers
+/// What a program does with a file happens here and reaches the store: reading it, making
+/// it, writing it, moving it and taking it away. What is left over answers
 /// <c>STATUS_MEDIA_WRITE_PROTECTED</c>, which Windows phrases as "the media is write
 /// protected" and every program understands. Refusing with a status Windows has no wording
 /// for is what produces the useless "catastrophic failure" dialog, so a refusal is never
@@ -274,8 +275,10 @@ public sealed class WinDavFileSystem : FileSystemBase
         }
     }
 
-    // A directory, and nothing else yet: a file comes into being by being written, and the
-    // writing is the rest of #36. Windows asks for both through this one call.
+    // A directory or a file: Windows asks for both through this one call and says which in
+    // the options. Either is made in the store before this returns, so that a name already
+    // taken, a permission refused and a store with no room are answered where Windows can
+    // still show them to somebody. See decision 86.
     /// <inheritdoc/>
     public override int Create(
         string fileName,
@@ -294,36 +297,44 @@ public sealed class WinDavFileSystem : FileSystemBase
         fileInfo = default;
         normalizedName = null;
 
-        if ((createOptions & FILE_DIRECTORY_FILE) == 0)
-        {
-            return Refused("Create of a file");
-        }
-
         // Refused for the reason it is refused at Open, and for one more: a delete stated at
-        // the open is never offered to CanDelete, so the emptiness of the directory would go
+        // the open is never offered to CanDelete, so the emptiness of a directory would go
         // untested and the whole tree under it would go with the close.
         if ((createOptions & FILE_DELETE_ON_CLOSE) != 0)
         {
             return Refused("Create with delete on close");
         }
 
+        bool directory = (createOptions & FILE_DIRECTORY_FILE) != 0;
         string path = ToRemotePath(fileName);
         long started = Stopwatch.GetTimestamp();
 
         try
         {
-            Await(_provider.CreateDirectoryAsync(path));
+            if (directory)
+            {
+                Await(_provider.CreateDirectoryAsync(path));
+            }
+            else
+            {
+                // Empty: what this handle is about to write goes out when it lets go. What
+                // the call is for is the name, and a store that already has it answers with
+                // the collision WinFsp turns into an Open of what is there.
+                Await(_provider.CreateFileAsync(path));
+            }
 
-            // What the store answers to the making of a directory says nothing about it, and
-            // the handle being opened has to carry an entry. Asked for rather than made up:
+            // What the store answers to the making of an entry says nothing about it, and
+            // the handle being opened has to carry one. Asked for rather than made up:
             // the times and what may be done with it are the store's to say, and this is the
             // entry an Open a moment later would be given.
             RemoteEntry entry = Await(_provider.GetAsync(path));
 
-            // The attributes, the descriptor and the size that were asked for are dropped. A
-            // directory in a store like this has nowhere to keep any of them, and the volume
+            // The attributes, the descriptor and the size that were asked for are dropped. An
+            // entry in a store like this has nowhere to keep any of them, and the volume
             // hands out one descriptor for everything it is asked about.
-            fileDesc = new OpenEntry(path, entry, _reads.Open(path, entry.Length));
+            //
+            // Emptied, because it was just made: a write to part of it has nothing to fetch.
+            fileDesc = new OpenEntry(path, entry, _reads.Open(path, entry.Length)) { Emptied = true };
             fileInfo = ToFileInfo(entry);
 
             if (_log.IsEnabled(LogLevel.Debug))
@@ -333,7 +344,10 @@ public sealed class WinDavFileSystem : FileSystemBase
 
             // Entered here for the reason Open enters it: what comes back is an open handle,
             // and Close leaves what either of the two put in.
-            _directories?.Handles.Enter(path);
+            if (directory)
+            {
+                _directories?.Handles.Enter(path);
+            }
 
             return STATUS_SUCCESS;
         }
@@ -444,7 +458,7 @@ public sealed class WinDavFileSystem : FileSystemBase
     {
         OpenEntry open = (OpenEntry)fileDesc;
 
-        fileInfo = ToFileInfo(open.Entry);
+        fileInfo = FileInfoOf(open);
 
         return STATUS_SUCCESS;
     }
@@ -473,6 +487,16 @@ public sealed class WinDavFileSystem : FileSystemBase
         if (open.Entry.IsDirectory)
         {
             return STATUS_FILE_IS_A_DIRECTORY;
+        }
+
+        // What this handle has written is here and not there. Reading around the stage would
+        // answer with the file as it was before the write, which is what Windows does when it
+        // reads back a file it has just copied.
+        if (open.Stage is WriteStage staged)
+        {
+            bytesTransferred = (uint)staged.Read((long)offset, length, buffer);
+
+            return bytesTransferred == 0 ? STATUS_END_OF_FILE : STATUS_SUCCESS;
         }
 
         long wanted = length;
@@ -589,22 +613,42 @@ public sealed class WinDavFileSystem : FileSystemBase
         }
     }
 
-    // Where a delete happens, because Windows puts it here: an entry is opened, asked about
-    // through CanDelete, and taken away when the last handle to it goes. A failure of this
-    // call cannot be reported to anybody, which is a limitation of Windows and not of this
-    // program, so it is written down and that is all. It is what CanDelete is for.
+    // The last call on a handle that can still reach the store, and Windows gives it no way
+    // to report a failure. Two things fall due here. An entry that was written to has its
+    // contents sent unless a Flush already sent them; an entry that is being deleted is
+    // taken away, which is where a delete happens because Windows puts it here. Both are
+    // written down and that is all, which is what CanDelete is for.
     //
-    // Reached for an entry that was written to and for one that is being deleted, because
-    // Init sets PostCleanupWhenModifiedOnly.
+    // Reached for exactly those two, because Init sets PostCleanupWhenModifiedOnly.
     /// <inheritdoc/>
     public override void Cleanup(object? fileNode, object fileDesc, string? fileName, uint flags)
     {
-        if ((flags & CleanupDelete) == 0 || fileDesc is not OpenEntry open)
+        if (fileDesc is not OpenEntry open)
         {
             return;
         }
 
         long started = Stopwatch.GetTimestamp();
+
+        if ((flags & CleanupDelete) == 0)
+        {
+            try
+            {
+                Send(open);
+            }
+            catch (ProviderException exception)
+            {
+                // Nobody is listening any more: the program that wrote the file has been told
+                // the write went through, and this is the only place the truth is kept.
+                _log.LogWarning(
+                    "Writing {Path} failed after {Elapsed} ms: {Reason}.",
+                    open.Path,
+                    Elapsed(started),
+                    exception.Error);
+            }
+
+            return;
+        }
 
         try
         {
@@ -628,15 +672,17 @@ public sealed class WinDavFileSystem : FileSystemBase
     }
 
     // The end of one handle. The window it read through belongs to the mount's ceiling and
-    // has to go back, whether the file was read to the end or dropped after a kilobyte; a
-    // directory is held by one handle fewer, which is what says whether anybody is still
-    // standing in it. Nothing else of ours outlives an open.
+    // has to go back, whether the file was read to the end or dropped after a kilobyte; what
+    // it wrote through is a file of its own and goes with it; a directory is held by one
+    // handle fewer, which is what says whether anybody is still standing in it. Nothing else
+    // of ours outlives an open.
     /// <inheritdoc/>
     public override void Close(object? fileNode, object fileDesc)
     {
         if (fileDesc is OpenEntry open)
         {
             open.Window.Close();
+            open.Stage?.Dispose();
 
             if (open.Entry.IsDirectory)
             {
@@ -763,12 +809,41 @@ public sealed class WinDavFileSystem : FileSystemBase
         return true;
     }
 
-    // Nothing is held back on this side, so there is nothing to flush and nothing that can
-    // fail. Answering anything else would put an error on an operation that changed nothing.
+    // Where a program that asked for its file to be on the server is told whether it is.
+    // Windows sends this only when something asks for it, so it is not where an upload is
+    // sure to happen; it is where one can be answered for. Cleanup takes whatever is left.
     /// <inheritdoc/>
     public override int Flush(object? fileNode, object? fileDesc, out FileInfo fileInfo)
     {
         fileInfo = default;
+
+        // The whole volume rather than one file, and this side holds nothing of its own.
+        if (fileDesc is not OpenEntry open)
+        {
+            return STATUS_SUCCESS;
+        }
+
+        long started = Stopwatch.GetTimestamp();
+
+        try
+        {
+            Send(open);
+        }
+        catch (ProviderException exception)
+        {
+            if (_log.IsEnabled(LogLevel.Warning))
+            {
+                _log.LogWarning(
+                    "Writing {Path} failed after {Elapsed} ms: {Reason}.",
+                    open.Path,
+                    Elapsed(started),
+                    exception.Error);
+            }
+
+            return ProviderStatus.From(exception);
+        }
+
+        fileInfo = FileInfoOf(open);
 
         return STATUS_SUCCESS;
     }
@@ -781,13 +856,14 @@ public sealed class WinDavFileSystem : FileSystemBase
             : base.ExceptionHandler(exception);
     }
 
-    // == What is still turned away ==
+    // == What a file is written with ==
     //
-    // The contents of a file and everything Windows would keep beside them. All of it
-    // answers the one status Windows can phrase, so that a person is told the volume will
-    // not take it instead of being shown a code. OverwriteEx is not among them: WinFsp
-    // passes it on to Overwrite, which is here.
+    // A store like this takes a file whole and Windows hands one over in pieces, so the
+    // pieces land in a staging file and go out as one upload when the handle lets go. See
+    // decision 86. OverwriteEx is not among these: WinFsp passes it on to Overwrite.
 
+    // A file opened to be replaced: what was in it counts as gone from this moment, and what
+    // is written now is written onto nothing. Nothing leaves here.
     /// <inheritdoc/>
     public override int Overwrite(
         object? fileNode,
@@ -797,9 +873,16 @@ public sealed class WinDavFileSystem : FileSystemBase
         ulong allocationSize,
         out FileInfo fileInfo)
     {
-        fileInfo = default;
+        OpenEntry open = (OpenEntry)fileDesc;
 
-        return Refused(nameof(Overwrite));
+        // Set before the stage is asked for, so that nothing is fetched to be thrown away.
+        open.Emptied = true;
+
+        StageOf(open).Truncate(0);
+
+        fileInfo = FileInfoOf(open);
+
+        return STATUS_SUCCESS;
     }
 
     /// <inheritdoc/>
@@ -817,9 +900,65 @@ public sealed class WinDavFileSystem : FileSystemBase
         bytesTransferred = 0;
         fileInfo = default;
 
-        return Refused(nameof(Write));
+        OpenEntry open = (OpenEntry)fileDesc;
+
+        if (open.Entry.IsDirectory)
+        {
+            return STATUS_FILE_IS_A_DIRECTORY;
+        }
+
+        WriteStage stage;
+        long started = Stopwatch.GetTimestamp();
+
+        try
+        {
+            // The one part of a write that can fail against the store: a write to part of a
+            // file the mount has not got here yet has to fetch the whole of it first.
+            stage = StageOf(open);
+        }
+        catch (ProviderException exception)
+        {
+            if (_log.IsEnabled(LogLevel.Warning))
+            {
+                _log.LogWarning(
+                    "Fetching {Path} to write to it failed after {Elapsed} ms: {Reason}.",
+                    open.Path,
+                    Elapsed(started),
+                    exception.Error);
+            }
+
+            return ProviderStatus.From(exception);
+        }
+
+        long at = writeToEndOfFile ? stage.Length : (long)offset;
+        long count = length;
+
+        // What the cache manager writes back out of pages it is holding. It must not make the
+        // file longer than it is, and a piece that lies past the end is not a piece any more.
+        if (constrainedIo)
+        {
+            if (at >= stage.Length)
+            {
+                fileInfo = FileInfoOf(open);
+
+                return STATUS_SUCCESS;
+            }
+
+            count = Math.Min(count, stage.Length - at);
+        }
+
+        stage.Write(at, buffer, (int)count);
+
+        bytesTransferred = (uint)count;
+        fileInfo = FileInfoOf(open);
+
+        return STATUS_SUCCESS;
     }
 
+    // Taken and kept nowhere. Windows sets the times on a file it has just copied, and this
+    // handle has nowhere to put them: the modification time travels with the upload and the
+    // creation time is a property of its own, which is the rest of #36. Refusing here would
+    // fail a copy that has otherwise gone through.
     /// <inheritdoc/>
     public override int SetBasicInfo(
         object? fileNode,
@@ -831,11 +970,14 @@ public sealed class WinDavFileSystem : FileSystemBase
         ulong changeTime,
         out FileInfo fileInfo)
     {
-        fileInfo = default;
+        fileInfo = FileInfoOf((OpenEntry)fileDesc);
 
-        return Refused(nameof(SetBasicInfo));
+        return STATUS_SUCCESS;
     }
 
+    // How long the file is. An allocation size is Windows saying how much room it expects to
+    // need, which a store that is handed the file whole does not act on; a file size is the
+    // length of the file itself, and it is cut or stretched to it here.
     /// <inheritdoc/>
     public override int SetFileSize(
         object? fileNode,
@@ -846,8 +988,40 @@ public sealed class WinDavFileSystem : FileSystemBase
     {
         fileInfo = default;
 
-        return Refused(nameof(SetFileSize));
+        OpenEntry open = (OpenEntry)fileDesc;
+        long started = Stopwatch.GetTimestamp();
+
+        try
+        {
+            if (!setAllocationSize)
+            {
+                StageOf(open).Truncate((long)newSize);
+            }
+        }
+        catch (ProviderException exception)
+        {
+            if (_log.IsEnabled(LogLevel.Warning))
+            {
+                _log.LogWarning(
+                    "Fetching {Path} to resize it failed after {Elapsed} ms: {Reason}.",
+                    open.Path,
+                    Elapsed(started),
+                    exception.Error);
+            }
+
+            return ProviderStatus.From(exception);
+        }
+
+        fileInfo = FileInfoOf(open);
+
+        return STATUS_SUCCESS;
     }
+
+    // == What is still turned away ==
+    //
+    // What Windows would keep beside a file and this store has nowhere to keep. Both answer
+    // the one status Windows can phrase, so that a person is told the volume will not take it
+    // instead of being shown a code.
 
     /// <inheritdoc/>
     public override int SetSecurity(
@@ -1004,6 +1178,82 @@ public sealed class WinDavFileSystem : FileSystemBase
             string.Compare(entry.Name, marker, StringComparison.OrdinalIgnoreCase) > 0);
     }
 
+    // The staging file this handle writes through, opened the first time it is wanted. A
+    // store like this is handed a file whole, so writing to part of one means having the
+    // whole of it here first; a file that was just made or just emptied has nothing to fetch.
+    private WriteStage StageOf(OpenEntry open)
+    {
+        if (open.Stage is WriteStage already)
+        {
+            return already;
+        }
+
+        // The tag the fetch or the open saw. It is what the upload is made conditional on, so
+        // that a file somebody else has changed in the meantime is not written over.
+        WriteStage stage = new(open.Entry.ETag);
+
+        try
+        {
+            if (!open.Emptied)
+            {
+                using Stream source = Await(_provider.OpenReadAsync(open.Path));
+
+                stage.Fill(source);
+            }
+        }
+        catch
+        {
+            stage.Dispose();
+
+            throw;
+        }
+
+        open.Stage = stage;
+
+        return stage;
+    }
+
+    // Where the contents of a file leave this side, and the only place they do. Flush comes
+    // here when a program asks for it and Cleanup when the handle lets go; whichever is first
+    // sends the file, and the other finds nothing left to send.
+    private void Send(OpenEntry open)
+    {
+        if (open.Stage is not WriteStage stage || !stage.Pending)
+        {
+            return;
+        }
+
+        long started = Stopwatch.GetTimestamp();
+        long length = stage.Length;
+
+        stage.Delivered(Await(_provider.WriteAsync(open.Path, stage.Rewound(), stage.ETag)));
+
+        if (_log.IsEnabled(LogLevel.Debug))
+        {
+            _log.LogDebug(
+                "Wrote {Length} bytes to {Path} in {Elapsed} ms.",
+                length,
+                open.Path,
+                Elapsed(started));
+        }
+    }
+
+    // What the handle looks like now: what the store said when it was opened, with the length
+    // it has been written to on this side, which is the only part of it a write changes before
+    // the upload.
+    private FileInfo FileInfoOf(OpenEntry open)
+    {
+        FileInfo info = ToFileInfo(open.Entry);
+
+        if (open.Stage is WriteStage stage)
+        {
+            info.FileSize = (ulong)stage.Length;
+            info.AllocationSize = AllocationSizeOf(info.FileSize);
+        }
+
+        return info;
+    }
+
     private FileInfo ToFileInfo(RemoteEntry entry)
     {
         ulong size = 0;
@@ -1030,8 +1280,9 @@ public sealed class WinDavFileSystem : FileSystemBase
         };
     }
 
-    // What an open handle carries: where the entry is in the store, and what it looked like
-    // when it was opened. WinFsp keeps this for us and hands it back on every call.
+    // What an open handle carries: where the entry is in the store, what it looked like when
+    // it was opened, and what has been written to it since. WinFsp keeps this for us and hands
+    // it back on every call.
     private sealed class OpenEntry(string path, RemoteEntry entry, ReadWindow window)
     {
         public string Path { get; } = path;
@@ -1039,6 +1290,15 @@ public sealed class WinDavFileSystem : FileSystemBase
         public RemoteEntry Entry { get; } = entry;
 
         public ReadWindow Window { get; } = window;
+
+        // Opened by the first write and let go at Close. While it is here it is what the file
+        // is: what has been written into it is read back out of it.
+        public WriteStage? Stage { get; set; }
+
+        // Whether what the store holds under this name is beside the point. Set where the
+        // entry was just made and where it was opened to be replaced; it is what says that a
+        // write to part of the file has nothing to fetch first.
+        public bool Emptied { get; set; }
     }
 
     // One walk through one directory listing, kept between calls to ReadDirectoryEntry.

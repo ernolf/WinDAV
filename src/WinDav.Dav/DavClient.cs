@@ -208,6 +208,12 @@ public sealed class DavClient
     /// An entity tag the resource must still carry for the write to happen, in the form the
     /// server wrote it. Without one the write overwrites whatever is there.
     /// </param>
+    /// <param name="ifNoneMatch">
+    /// An entity tag the resource must not carry, or <c>*</c> for a write that may only
+    /// create. The other half of the condition, and what turns a write into a claim on a
+    /// name: a server that already has something there answers
+    /// <see cref="HttpStatusCode.PreconditionFailed"/> and writes nothing.
+    /// </param>
     /// <param name="headers">Extra request headers, see <see cref="MkColAsync"/>.</param>
     /// <param name="cancellationToken">Cancels the request.</param>
     /// <returns>
@@ -224,6 +230,7 @@ public sealed class DavClient
         Stream content,
         string? contentType = null,
         string? ifMatch = null,
+        string? ifNoneMatch = null,
         IEnumerable<KeyValuePair<string, string>>? headers = null,
         CancellationToken cancellationToken = default)
     {
@@ -241,6 +248,15 @@ public sealed class DavClient
         if (ifMatch is not null)
         {
             request.Headers.IfMatch.Add(EntityTagHeaderValue.Parse(ifMatch));
+        }
+
+        if (ifNoneMatch is not null)
+        {
+            // The star has no quotes and is not a tag, so it is not parsed as one.
+            request.Headers.IfNoneMatch.Add(
+                string.Equals(ifNoneMatch, "*", StringComparison.Ordinal)
+                    ? EntityTagHeaderValue.Any
+                    : EntityTagHeaderValue.Parse(ifNoneMatch));
         }
 
         AddHeaders(request, headers);

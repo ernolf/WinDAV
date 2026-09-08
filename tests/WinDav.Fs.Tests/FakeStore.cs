@@ -8,12 +8,14 @@ namespace WinDav.Fs.Tests;
 
 // A store held in memory, with the same seam a real provider has: paths with slashes, and
 // a ProviderException for everything that cannot be done. Only what this cut of the file
-// system reaches is implemented; writing the contents of a file throws, so a test that
-// reached it by accident fails loudly instead of passing quietly.
+// system reaches is implemented; copying a directory throws, so a test that reached it by
+// accident fails loudly instead of passing quietly.
 internal sealed class FakeStore : IStorageProvider
 {
     private readonly Dictionary<string, RemoteEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, byte[]> _content = new(StringComparer.OrdinalIgnoreCase);
+
+    private int _version;
 
     public FakeStore()
     {
@@ -26,6 +28,10 @@ internal sealed class FakeStore : IStorageProvider
     // Every range that was asked for, in order. One entry is one request, which is what a
     // test about the read path counts.
     public List<(long Offset, long? Count)> Reads { get; } = [];
+
+    // What was written, in order: where it went, the bytes, and the entity tag the write
+    // was made conditional on. One entry is one upload.
+    public List<(string Path, byte[] Content, string? IfMatch)> Writes { get; } = [];
 
     public long LastOffset { get; private set; }
 
@@ -45,7 +51,8 @@ internal sealed class FakeStore : IStorageProvider
         string path,
         string content,
         EntryPermissions? permissions = null,
-        DateTimeOffset? lastModified = null)
+        DateTimeOffset? lastModified = null,
+        string? eTag = null)
     {
         byte[] bytes = Encoding.UTF8.GetBytes(content);
 
@@ -54,6 +61,7 @@ internal sealed class FakeStore : IStorageProvider
             Length = bytes.Length,
             Permissions = permissions,
             LastModified = lastModified,
+            ETag = eTag,
         };
 
         _content[path] = bytes;
@@ -149,11 +157,46 @@ internal sealed class FakeStore : IStorageProvider
         return Task.FromResult<Stream>(new MemoryStream(bytes, start, length, false));
     }
 
-    public Task<string?> WriteAsync(
+    public Task<string?> CreateFileAsync(string path, CancellationToken cancellationToken)
+    {
+        Fail();
+
+        if (_entries.ContainsKey(path))
+        {
+            throw new ProviderException(ProviderError.AlreadyExists);
+        }
+
+        if (!_entries.ContainsKey(ParentOf(path)))
+        {
+            throw new ProviderException(ProviderError.Conflict);
+        }
+
+        return Task.FromResult<string?>(Store(path, []));
+    }
+
+    public async Task<string?> WriteAsync(
         string path,
         Stream content,
         string? ifMatch,
-        CancellationToken cancellationToken) => throw new NotSupportedException();
+        CancellationToken cancellationToken)
+    {
+        Fail();
+
+        if (ifMatch is not null && !string.Equals(_entries.GetValueOrDefault(path)?.ETag, ifMatch, StringComparison.Ordinal))
+        {
+            throw new ProviderException(ProviderError.PreconditionFailed);
+        }
+
+        using MemoryStream taken = new();
+
+        await content.CopyToAsync(taken, cancellationToken).ConfigureAwait(false);
+
+        byte[] bytes = taken.ToArray();
+
+        Writes.Add((path, bytes, ifMatch));
+
+        return Store(path, bytes);
+    }
 
     public Task CreateDirectoryAsync(string path, CancellationToken cancellationToken)
     {
@@ -249,6 +292,9 @@ internal sealed class FakeStore : IStorageProvider
     // is there without going through the file system.
     public RemoteEntry? At(string path) => _entries.GetValueOrDefault(path);
 
+    // What the store now holds at a path, which is how a test asks what an upload put there.
+    public string ContentOf(string path) => Encoding.UTF8.GetString(_content[path]);
+
     // An entry and everything below it.
     private List<string> Under(string path)
     {
@@ -267,6 +313,18 @@ internal sealed class FakeStore : IStorageProvider
         int slash = path.LastIndexOf('/');
 
         return slash <= 0 ? "/" : path[..slash];
+    }
+
+    // What a store does on every write: the entry is what it now is, and it carries a tag
+    // that stands for this version and no other.
+    private string Store(string path, byte[] bytes)
+    {
+        string eTag = $"v{++_version}";
+
+        _entries[path] = new RemoteEntry(path, false) { Length = bytes.Length, ETag = eTag };
+        _content[path] = bytes;
+
+        return eTag;
     }
 
     private RemoteEntry Find(string path)

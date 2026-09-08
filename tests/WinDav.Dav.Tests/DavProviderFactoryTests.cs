@@ -301,6 +301,9 @@ public sealed class DavProviderFactoryTests
         public Task<string?> WriteAsync(string path, Stream content, string? ifMatch, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<string?> CreateFileAsync(string path, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task CreateDirectoryAsync(string path, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

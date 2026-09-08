@@ -367,17 +367,265 @@ public sealed class WinDavFileSystemTests
 
         object fileDesc = OpenExisting(fileSystem, "\\note.txt");
 
-        // A file comes into being by being written, and that is the rest of #36.
-        Assert.Equal(
-            Refused,
-            fileSystem.Create("\\new.txt", 0, 0, 0, [], 0, out _, out _, out _, out _));
-
-        Assert.Equal(Refused, fileSystem.Overwrite(null, fileDesc, 0, false, 0, out _));
-        Assert.Equal(Refused, fileSystem.Write(null, fileDesc, IntPtr.Zero, 0, 0, false, false, out _, out _));
-        Assert.Equal(Refused, fileSystem.SetBasicInfo(null, fileDesc, 0, 0, 0, 0, 0, out _));
-        Assert.Equal(Refused, fileSystem.SetFileSize(null, fileDesc, 0, false, out _));
         Assert.Equal(Refused, fileSystem.SetSecurity(null, fileDesc, AccessControlSections.Access, []));
         Assert.Equal(Refused, fileSystem.SetVolumeLabel("Anything", out _));
+    }
+
+    [Fact]
+    public void AFileIsMadeEmptyBeforeAnythingIsWrittenToIt()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, "\\new.txt", out object? fileDesc, out FileInfo fileInfo));
+
+        Assert.NotNull(fileDesc);
+        Assert.Equal(0UL, fileInfo.FileSize);
+
+        // The name is claimed here and not at the upload, which is what gives a permission
+        // refused, a name already taken and a store with no room somewhere to be reported.
+        RemoteEntry? made = store.At("/new.txt");
+
+        Assert.NotNull(made);
+        Assert.False(made.IsDirectory);
+
+        fileSystem.Close(null, fileDesc);
+    }
+
+    [Fact]
+    public void AFileThatIsAlreadyThereIsACollisionAndNotAFailure()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        // The status WinFsp answers by falling back to an Open, which is how FILE_OPEN_IF is
+        // served without anything being written over.
+        Assert.Equal(
+            FileSystemBase.STATUS_OBJECT_NAME_COLLISION,
+            CreateFile(fileSystem, "\\note.txt", out _, out _));
+
+        Assert.Equal("hello", store.ContentOf("/note.txt"));
+    }
+
+    [Fact]
+    public void WhatIsWrittenIsReadBackFromTheHandleThatWroteIt()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        WriteAt(fileSystem, fileDesc, 0, "HELLO");
+
+        Assert.Equal(FileSystemBase.STATUS_SUCCESS, Read(fileSystem, fileDesc, 0, 5, out byte[] taken));
+        Assert.Equal("HELLO", Encoding.UTF8.GetString(taken));
+
+        // Nothing has gone out yet, so what is read back can only have come from this side.
+        Assert.Empty(store.Writes);
+    }
+
+    [Fact]
+    public void WritingToPartOfAFileSendsTheWholeOfItBack()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        WriteAt(fileSystem, fileDesc, 0, "H");
+
+        Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.Flush(null, fileDesc, out _));
+
+        // A store like this is handed a file whole, so the rest of it had to be fetched here
+        // before one letter of it could be changed.
+        Assert.Equal("Hello", store.ContentOf("/note.txt"));
+    }
+
+    [Fact]
+    public void WhatIsWrittenGoesOutAtTheFlushAndNotAgainAtTheCleanup()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, "\\new.txt", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        WriteAt(fileSystem, fileDesc, 0, "hello");
+
+        Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.Flush(null, fileDesc, out _));
+
+        fileSystem.Cleanup(null, fileDesc, "\\new.txt", 0);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Single(store.Writes);
+        Assert.Equal("hello", store.ContentOf("/new.txt"));
+    }
+
+    [Fact]
+    public void WhatIsNeverFlushedStillGoesOutAtTheCleanup()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, "\\new.txt", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        // What the Explorer does when it copies a file: it never asks for the buffers to be
+        // flushed, and Cleanup is the last call that can still reach the store.
+        WriteAt(fileSystem, fileDesc, 0, "hello");
+
+        fileSystem.Cleanup(null, fileDesc, "\\new.txt", 0);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Single(store.Writes);
+        Assert.Equal("hello", store.ContentOf("/new.txt"));
+    }
+
+    [Fact]
+    public void AWriteIsMadeConditionalOnTheTagTheFileWasOpenedWith()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello", eTag: "v1");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        WriteAt(fileSystem, fileDesc, 0, "HELLO");
+
+        Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.Flush(null, fileDesc, out _));
+
+        Assert.Equal("v1", Assert.Single(store.Writes).IfMatch);
+    }
+
+    [Fact]
+    public void AFileSomebodyElseChangedIsNotWrittenOver()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello", eTag: "v1");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        WriteAt(fileSystem, fileDesc, 0, "HELLO");
+
+        store.AddFile("/note.txt", "somebody else", eTag: "v2");
+
+        // The condition the upload was made on does not hold any more, and Windows has a
+        // wording for that: the file is in use by somebody else.
+        Assert.Equal(
+            FileSystemBase.STATUS_SHARING_VIOLATION,
+            fileSystem.Flush(null, fileDesc, out _));
+
+        Assert.Equal("somebody else", store.ContentOf("/note.txt"));
+    }
+
+    [Fact]
+    public void AFileOpenedToBeReplacedIsNotFetchedFirst()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.Overwrite(null, fileDesc, 0, false, 0, out FileInfo emptied));
+
+        Assert.Equal(0UL, emptied.FileSize);
+
+        WriteAt(fileSystem, fileDesc, 0, "new");
+
+        Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.Flush(null, fileDesc, out _));
+
+        Assert.Equal("new", store.ContentOf("/note.txt"));
+
+        // What was in the file was on its way out, so fetching it would have been a request
+        // spent on bytes nobody was going to look at.
+        Assert.Empty(store.Opened);
+    }
+
+    [Fact]
+    public void ASizeCutsTheFileAndAnAllocationSizeLeavesItAlone()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        // Windows says how much room it expects to need before it writes; a store that is
+        // handed the file whole has nothing to do with the figure.
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.SetFileSize(null, fileDesc, 4096, true, out FileInfo hinted));
+
+        Assert.Equal(5UL, hinted.FileSize);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.SetFileSize(null, fileDesc, 3, false, out FileInfo cut));
+
+        Assert.Equal(3UL, cut.FileSize);
+        Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.Flush(null, fileDesc, out _));
+
+        Assert.Equal("hel", store.ContentOf("/note.txt"));
+    }
+
+    [Fact]
+    public void TheTimesWindowsSetsOnACopyAreTakenAndKeptNowhere()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        // Refusing this would fail a copy that has otherwise gone through.
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.SetBasicInfo(null, fileDesc, 0, 1, 1, 1, 1, out _));
+    }
+
+    [Fact]
+    public void AFileThatIsBeingDeletedIsNotUploadedFirst()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, "\\note.txt");
+
+        WriteAt(fileSystem, fileDesc, 0, "HELLO");
+
+        fileSystem.Cleanup(null, fileDesc, "\\note.txt", FileSystemBase.CleanupDelete);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Empty(store.Writes);
+        Assert.Null(store.At("/note.txt"));
     }
 
     [Fact]
@@ -591,12 +839,12 @@ public sealed class WinDavFileSystemTests
     }
 
     [Fact]
-    public void NothingIsHeldBackSoFlushingSucceeds()
+    public void FlushingTheWholeVolumeHasNothingToDoAndSaysSo()
     {
         WinDavFileSystem fileSystem = Mount(new FakeStore());
 
-        // Also the answer when WinFsp flushes the whole volume, which it does with nothing
-        // in hand at all.
+        // WinFsp flushes the volume with nothing in hand at all. Nothing is held back that
+        // does not belong to a handle, so there is nothing here that could fail.
         Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.Flush(null, null, out _));
     }
 
@@ -636,6 +884,58 @@ public sealed class WinDavFileSystemTests
             out fileDesc,
             out fileInfo,
             out _);
+    }
+
+    private static int CreateFile(
+        WinDavFileSystem fileSystem,
+        string fileName,
+        out object? fileDesc,
+        out FileInfo fileInfo)
+    {
+        return fileSystem.Create(
+            fileName,
+            0,
+            0,
+            0,
+            [],
+            0,
+            out _,
+            out fileDesc,
+            out fileInfo,
+            out _);
+    }
+
+    private static void WriteAt(
+        WinDavFileSystem fileSystem,
+        object fileDesc,
+        ulong offset,
+        string content)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(content);
+        IntPtr buffer = Marshal.AllocHGlobal(bytes.Length);
+
+        try
+        {
+            Marshal.Copy(bytes, 0, buffer, bytes.Length);
+
+            int status = fileSystem.Write(
+                null,
+                fileDesc,
+                buffer,
+                offset,
+                (uint)bytes.Length,
+                false,
+                false,
+                out uint transferred,
+                out _);
+
+            Assert.Equal(FileSystemBase.STATUS_SUCCESS, status);
+            Assert.Equal((uint)bytes.Length, transferred);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
     }
 
     private static object OpenExisting(WinDavFileSystem fileSystem, string fileName)

@@ -428,6 +428,13 @@ public sealed class AttributeCacheTests
             return Task.FromResult<Stream>(new MemoryStream());
         }
 
+        public Task<string?> CreateFileAsync(string path, CancellationToken cancellationToken = default)
+        {
+            _paths.Add(path);
+
+            return Task.FromResult<string?>(null);
+        }
+
         public Task<string?> WriteAsync(
             string path,
             Stream content,

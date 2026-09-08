@@ -411,6 +411,23 @@ public sealed class DirectoryCache : IStorageProvider
     }
 
     /// <inheritdoc/>
+    public async Task<string?> CreateFileAsync(string path, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        try
+        {
+            return await _inner.CreateFileAsync(path, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // A file that was not there before is in the directory now.
+            ForgetParent(path);
+            Appeared(path);
+        }
+    }
+
+    /// <inheritdoc/>
     public async Task CreateDirectoryAsync(string path, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(path);

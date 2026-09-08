@@ -202,6 +202,31 @@ public abstract class DavStorageProvider : IStorageProvider
     }
 
     /// <inheritdoc/>
+    public async Task<string?> CreateFileAsync(string path, CancellationToken cancellationToken = default)
+    {
+        Uri uri = DavPath.ToUri(BaseUri, path);
+
+        try
+        {
+            using MemoryStream empty = new();
+
+            return await Client
+                .PutAsync(uri, empty, contentType: null, ifMatch: null, ifNoneMatch: "*", cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException exception)
+        {
+            // The condition is the whole point of the request: 412 is the server saying
+            // something is already at the path, and that it has written nothing.
+            ProviderError? occupied = exception.StatusCode == HttpStatusCode.PreconditionFailed
+                ? ProviderError.AlreadyExists
+                : null;
+
+            throw Failed($"Creating {DavPath.Normalise(path)}", exception, occupied);
+        }
+    }
+
+    /// <inheritdoc/>
     public async Task CreateDirectoryAsync(string path, CancellationToken cancellationToken = default)
     {
         Uri uri = DavPath.ToCollectionUri(BaseUri, path);

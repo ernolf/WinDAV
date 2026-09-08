@@ -183,6 +183,19 @@ public sealed class AttributeCache : IStorageProvider
     }
 
     /// <inheritdoc/>
+    public async Task<string?> CreateFileAsync(string path, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await _inner.CreateFileAsync(path, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            Forget(path);
+        }
+    }
+
+    /// <inheritdoc/>
     public async Task CreateDirectoryAsync(string path, CancellationToken cancellationToken = default)
     {
         try

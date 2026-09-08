@@ -218,6 +218,9 @@ public sealed class FolderPickerTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task<string?> CreateFileAsync(string path, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public Task CreateDirectoryAsync(string path, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
