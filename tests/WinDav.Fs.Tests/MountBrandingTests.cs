@@ -29,9 +29,9 @@ public sealed class MountBrandingTests : IDisposable
     [Fact]
     public void TheKeyIsNamedTheWayExplorerNamesIt()
     {
-        MountBranding branding = Branding(prefix: @"\global-social.net\ernolf");
+        MountBranding branding = Branding(prefix: @"\cloud.example.com\ernolf");
 
-        Assert.Equal("##global-social.net#ernolf", branding.KeyName);
+        Assert.Equal("##cloud.example.com#ernolf", branding.KeyName);
     }
 
     [Fact]
@@ -57,11 +57,11 @@ public sealed class MountBrandingTests : IDisposable
     [Fact]
     public void TheNameIsWrittenWhereExplorerReadsIt()
     {
-        MountBranding branding = Branding(name: "ernolf@global-social.net");
+        MountBranding branding = Branding(name: "ernolf@cloud.example.com");
 
         branding.Ensure();
 
-        Assert.Equal("ernolf@global-social.net", Label("##global-social.net#ernolf"));
+        Assert.Equal("ernolf@cloud.example.com", Label("##cloud.example.com#ernolf"));
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public sealed class MountBrandingTests : IDisposable
         branding.Ensure();
 
         using (RegistryKey key = Registry.CurrentUser.OpenSubKey(
-            $@"{_prefix}\{MountPoints}\##global-social.net#ernolf", true)!)
+            $@"{_prefix}\{MountPoints}\##cloud.example.com#ernolf", true)!)
         {
             key.DeleteValue("_LabelFromReg");
         }
@@ -131,7 +131,7 @@ public sealed class MountBrandingTests : IDisposable
 
         // As Explorer leaves it: its own cache of the name, beside ours.
         using (RegistryKey key = Registry.CurrentUser.CreateSubKey(
-            $@"{_prefix}\{MountPoints}\##global-social.net#ernolf"))
+            $@"{_prefix}\{MountPoints}\##cloud.example.com#ernolf"))
         {
             key.SetValue("_LabelFromDesktopINI", string.Empty, RegistryValueKind.String);
         }
@@ -139,7 +139,7 @@ public sealed class MountBrandingTests : IDisposable
         branding.Remove();
 
         using RegistryKey? gone = Registry.CurrentUser.OpenSubKey(
-            $@"{_prefix}\{MountPoints}\##global-social.net#ernolf");
+            $@"{_prefix}\{MountPoints}\##cloud.example.com#ernolf");
 
         Assert.Null(gone);
     }
@@ -205,10 +205,10 @@ public sealed class MountBrandingTests : IDisposable
         Assert.Throws<ArgumentNullException>(() => new MountBranding(null!, "Z:", _prefix));
 
     private MountBranding Branding(
-        string? name = "ernolf@global-social.net",
+        string? name = "ernolf@cloud.example.com",
         string? icon = null,
         string? mountPoint = "Z:",
-        string? prefix = @"\global-social.net\ernolf") =>
+        string? prefix = @"\cloud.example.com\ernolf") =>
         new(
             new MountSettings
             {

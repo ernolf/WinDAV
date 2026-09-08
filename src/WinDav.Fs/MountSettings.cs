@@ -58,8 +58,8 @@ public sealed class MountSettings
     /// <remarks>
     /// This is the other name, the one that comes from the registry rather than from the
     /// volume. Windows builds one of its own out of the network name, and it reads
-    /// <c>ernolf (\\global-social.net)</c> where a person would have written
-    /// <c>ernolf@global-social.net</c>.
+    /// <c>ernolf (\\cloud.example.com)</c> where a person would have written
+    /// <c>ernolf@cloud.example.com</c>.
     /// </remarks>
     public string? ExplorerName { get; init; }
 

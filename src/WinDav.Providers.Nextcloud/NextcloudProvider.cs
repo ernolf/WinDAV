@@ -360,7 +360,7 @@ public sealed class NextcloudProvider : DavStorageProvider
 
                 using MemoryStream piece = new(buffer, 0, wanted, writable: false);
                 await Client
-                    .PutAsync(chunk, piece, contentType: null, ifMatch: null, headers, cancellationToken)
+                    .PutAsync(chunk, piece, contentType: null, ifMatch: null, headers: headers, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
                 left -= wanted;

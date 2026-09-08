@@ -100,6 +100,27 @@ public interface IStorageProvider
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Creates an empty file, and only where nothing is there yet.
+    /// </summary>
+    /// <param name="path">The file to create.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>
+    /// The entity tag of what was created, or <see langword="null"/> when the store did not
+    /// state one.
+    /// </returns>
+    /// <remarks>
+    /// The counterpart of <see cref="CreateDirectoryAsync"/>: the same question asked about a
+    /// file. It is separate from <see cref="WriteAsync"/>, which takes whatever is there,
+    /// because a name that is already taken, a permission refused and a store with no room
+    /// are worth finding out before any contents have been written.
+    /// </remarks>
+    /// <exception cref="ProviderException">
+    /// <see cref="ProviderError.AlreadyExists"/> when something is already there,
+    /// <see cref="ProviderError.Conflict"/> when the directory above it is missing.
+    /// </exception>
+    Task<string?> CreateFileAsync(string path, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Creates a directory. The directory above it has to exist already.
     /// </summary>
     /// <param name="path">The directory to create.</param>
