@@ -398,17 +398,46 @@ public sealed class DirectoryCache : IStorageProvider
     {
         ArgumentNullException.ThrowIfNull(path);
 
+        // Read before the write rather than after it: the store leaves the stream where it
+        // stopped reading, and what went up is what stood in front of it when it started.
+        long? sent = content is { CanSeek: true } ? content.Length - content.Position : null;
+        string? eTag;
+
         try
         {
-            return await _inner.WriteAsync(path, content, ifMatch, times, cancellationToken).ConfigureAwait(false);
+            eTag = await _inner.WriteAsync(path, content, ifMatch, times, cancellationToken).ConfigureAwait(false);
         }
-        finally
+        catch
         {
-            // The directory this is in shows a length and a time that have just changed, and
-            // a file that was not there before is in it now.
+            // Nothing is known about what is there now, not even whether the write reached
+            // the store at all, so the listing goes.
             ForgetParent(path);
             Appeared(path);
+
+            throw;
         }
+
+        // What a write changed the entry to is in our hand: the length is what went up, the
+        // tag is what came back, and the times are what was asked for. Where all three are
+        // known the entry is put into the listing in place of the old one and the rest of
+        // the listing stands. That is what a directory being filled is otherwise listed
+        // again for, once per file, over everything already in it.
+        if (sent is long length && times.LastModified is not null)
+        {
+            Wrote(path, length, eTag, times);
+        }
+        else
+        {
+            // A stream that will not say how long it is, or a caller that named no time,
+            // leaves a hole that could only be filled with a guess. A listing with a guess
+            // in it is worse than no listing.
+            ForgetParent(path);
+        }
+
+        // A file that was not there before is in the directory now.
+        Appeared(path);
+
+        return eTag;
     }
 
     /// <inheritdoc/>
@@ -942,6 +971,68 @@ public sealed class DirectoryCache : IStorageProvider
         }
 
         return keys;
+    }
+
+    // A write leaves one entry of a directory changed and every other one as it was, so that
+    // one is put in place of the old rather than the whole listing thrown away. What a write
+    // does not touch is carried over from what stood there: the name the store knows the
+    // entry by, what may be done with it, what it holds.
+    //
+    // Self goes. A write into a directory changes the directory as well — its own time, its
+    // own version — and nothing here says what to. The stamp stays as it was: a listing that
+    // was kept honest has not been proven current, and it has to run out when it would have.
+    private void Wrote(string path, long length, string? eTag, EntryTimes times)
+    {
+        if (ParentOf(path) is not string parent)
+        {
+            return;
+        }
+
+        lock (_sync)
+        {
+            if (!_listings.TryGetValue(parent, out Held held))
+            {
+                return;
+            }
+
+            List<RemoteEntry> entries = [.. held.Entries];
+            int at = -1;
+
+            for (int index = 0; index < entries.Count; index++)
+            {
+                if (string.Equals(entries[index].Path, path, StringComparison.Ordinal))
+                {
+                    at = index;
+                    break;
+                }
+            }
+
+            RemoteEntry? was = at < 0 ? null : entries[at];
+            RemoteEntry written = new(path, isDirectory: false)
+            {
+                Length = length,
+                LastModified = times.LastModified,
+                Created = times.Created ?? was?.Created,
+                ETag = eTag,
+                Id = was?.Id,
+                Permissions = was?.Permissions,
+                ContentType = was?.ContentType,
+            };
+
+            // Back where it stood, rather than at the end. A listing goes out in the order
+            // it came in, and something reading a directory a window at a time would see an
+            // entry twice, or miss one, if the order moved under it.
+            if (at < 0)
+            {
+                entries.Add(written);
+            }
+            else
+            {
+                entries[at] = written;
+            }
+
+            _listings[parent] = new Held(entries, null, held.Stamp);
+        }
     }
 
     private void ForgetParent(string path)

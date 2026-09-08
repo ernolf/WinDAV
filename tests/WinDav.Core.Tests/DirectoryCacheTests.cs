@@ -526,6 +526,147 @@ public sealed class DirectoryCacheTests
     }
 
     [Fact]
+    public async Task AWriteLeavesTheListingStandingWithWhatItWroteInIt()
+    {
+        TreeStore store = new() { WriteETag = "\"v2\"" };
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/a.txt");
+        store.AddFile("/music/b.txt");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        using MemoryStream content = new(new byte[7]);
+
+        await cache.WriteAsync(
+            "/music/a.txt",
+            content,
+            times: new EntryTimes(null, s_now),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        RemoteEntry entry = await cache.GetAsync("/music/a.txt", TestContext.Current.CancellationToken);
+
+        Assert.Equal(7, entry.Length);
+        Assert.Equal(s_now, entry.LastModified);
+        Assert.Equal("\"v2\"", entry.ETag);
+
+        // The listing the entry came out of is the one the write was supposed to have taken
+        // away, and everything else in it is still there.
+        DirectoryListing after = await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        Assert.Equal<string>(["/music/a.txt", "/music/b.txt"], after.Entries.Select(held => held.Path));
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task AWriteOfANameThatWasNotThereAddsItToTheListing()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        using MemoryStream content = new(new byte[3]);
+
+        await cache.WriteAsync(
+            "/music/new.txt",
+            content,
+            times: new EntryTimes(null, s_now),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        RemoteEntry entry = await cache.GetAsync("/music/new.txt", TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, entry.Length);
+        Assert.False(entry.IsDirectory);
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task WhatAWriteDidToTheDirectoryItselfIsNotClaimed()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/a.txt");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        Assert.NotNull((await cache.ListAsync("/music", TestContext.Current.CancellationToken)).Self);
+
+        using MemoryStream content = new(new byte[7]);
+
+        await cache.WriteAsync(
+            "/music/a.txt",
+            content,
+            times: new EntryTimes(null, s_now),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        // A write into a directory changes the directory as well, and the write says nothing
+        // about what to. The entries are still good; the directory's own entry is not.
+        DirectoryListing after = await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        Assert.Null(after.Self);
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task AWriteWithNoTimeToGoOnTakesTheListingAway()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/a.txt");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        using MemoryStream content = new(new byte[7]);
+
+        // Without one the entry could only be written down with a guess in it, and the
+        // listing is worth less with a guess in it than it is gone.
+        await cache.WriteAsync(
+            "/music/a.txt",
+            content,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await cache.GetAsync("/music/a.txt", TestContext.Current.CancellationToken);
+
+        Assert.Equal<string>(["/music", "/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task AWriteThatDidNotGoThroughTakesTheListingAway()
+    {
+        TreeStore store = new() { RefuseWrites = true };
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/a.txt");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        using MemoryStream content = new(new byte[7]);
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.WriteAsync(
+                "/music/a.txt",
+                content,
+                times: new EntryTimes(null, s_now),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        await cache.GetAsync("/music/a.txt", TestContext.Current.CancellationToken);
+
+        Assert.Equal<string>(["/music", "/music"], store.Listed);
+    }
+
+    [Fact]
     public async Task ABurnedNameThatTurnsUpInAListingIsAskedForAgain()
     {
         TreeStore store = new();
@@ -1879,6 +2020,12 @@ public sealed class DirectoryCacheTests
 
         public List<string> Asked { get; } = [];
 
+        // What a write answers with, for the tests that follow the tag into the listing.
+        public string? WriteETag { get; init; }
+
+        // A store that will not take the write at all.
+        public bool RefuseWrites { get; init; }
+
         public int SpaceAsked { get; private set; }
 
         public void AddDirectory(string path, string? version, DateTimeOffset? modified = null)
@@ -1999,9 +2146,14 @@ public sealed class DirectoryCacheTests
             EntryTimes times = default,
             CancellationToken cancellationToken = default)
         {
+            if (RefuseWrites)
+            {
+                throw new ProviderException(ProviderError.Busy, "Try again later.");
+            }
+
             _files.Add(path);
 
-            return Task.FromResult<string?>(null);
+            return Task.FromResult(WriteETag);
         }
 
         public Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken = default) =>
