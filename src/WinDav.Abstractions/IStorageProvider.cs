@@ -84,10 +84,17 @@ public interface IStorageProvider
     /// The <see cref="RemoteEntry.ETag"/> the file must still carry for the write to
     /// happen. Without one the write replaces whatever is there.
     /// </param>
+    /// <param name="times">
+    /// The times the file is to carry once it is written. A store that can put them into
+    /// the same request as the contents does; one that cannot sets them afterwards, as
+    /// <see cref="SetTimesAsync"/> would. Empty is the caller saying nothing about them,
+    /// and then the file carries whatever the store gives it.
+    /// </param>
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>
     /// The entity tag of what was written, or <see langword="null"/> when the store did not
-    /// state one.
+    /// state one. A store that had to set <paramref name="times"/> in a second request has
+    /// none to state: the file changed again after the answer that carried the tag.
     /// </returns>
     /// <exception cref="ProviderException">
     /// <see cref="ProviderError.PreconditionFailed"/> when <paramref name="ifMatch"/> no
@@ -97,7 +104,30 @@ public interface IStorageProvider
         string path,
         Stream content,
         string? ifMatch = null,
+        EntryTimes times = default,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sets the times an entry carries, without touching what is in it.
+    /// </summary>
+    /// <param name="path">The entry, a file or a directory.</param>
+    /// <param name="times">
+    /// What to set. Whichever of the two is absent is left as it is, and an empty
+    /// <see cref="EntryTimes"/> asks for nothing and sends nothing.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>A task that completes when the store has been asked.</returns>
+    /// <remarks>
+    /// A store that does not let its times be set answers by doing nothing, and that is not
+    /// a failure: a time is worth less than the entry it belongs to, and a caller that has
+    /// just written a file must not be told the write failed because a date did. What is a
+    /// failure is the entry being missing or refused, and that arrives as it does anywhere
+    /// else.
+    /// </remarks>
+    /// <exception cref="ProviderException">
+    /// <see cref="ProviderError.NotFound"/> when there is no such entry.
+    /// </exception>
+    Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates an empty file, and only where nothing is there yet.

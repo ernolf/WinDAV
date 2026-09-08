@@ -3,6 +3,8 @@
 
 using System.Globalization;
 using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
 using WinDav.Abstractions;
 using WinDav.Dav;
 using Xunit;
@@ -19,6 +21,17 @@ public sealed class NextcloudProviderTests
     // to build in a test.
     private const long ChunkSize = 5L * 1024 * 1024;
 
+    // Two dates far enough apart to tell which of them ended up where, with the seconds
+    // since the epoch the server is handed written out rather than worked out, so that the
+    // test does not agree with the code by doing the same sum.
+    private static readonly DateTimeOffset s_created = new(2024, 5, 6, 7, 8, 9, TimeSpan.Zero);
+
+    private const string CreatedSeconds = "1714979289";
+
+    private static readonly DateTimeOffset s_modified = new(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
+
+    private const string ModifiedSeconds = "1767323045";
+
     [Fact]
     public async Task AFileThatFitsInOneChunkGoesOutAsASinglePut()
     {
@@ -32,6 +45,100 @@ public sealed class NextcloudProviderTests
         Assert.Equal("PUT", only.Method);
         Assert.Equal(new Uri(s_base, "small.bin"), only.Uri);
         Assert.Null(only.Destination);
+    }
+
+    [Fact]
+    public async Task TheTimesRideAlongOnTheSinglePut()
+    {
+        RecordingHandler handler = new() { ETag = "\"def456\"" };
+        using HttpClient httpClient = new(handler);
+        using MemoryStream content = new(Pattern(1024));
+
+        string? etag = await Provider(httpClient).WriteAsync(
+            "/small.bin",
+            content,
+            times: new EntryTimes(s_created, s_modified),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Exchange only = Assert.Single(handler.Exchanges);
+        Assert.Equal("PUT", only.Method);
+        Assert.Equal(ModifiedSeconds, only.Modified);
+        Assert.Equal(CreatedSeconds, only.Created);
+
+        // The server sets the times while it writes the file and works the tag out after,
+        // so the tag it answers with is the tag of what is now there.
+        Assert.Equal("\"def456\"", etag);
+    }
+
+    [Fact]
+    public async Task ATimeInsideTheFirstDayIsNotSent()
+    {
+        RecordingHandler handler = new();
+        using HttpClient httpClient = new(handler);
+        using MemoryStream content = new(Pattern(1024));
+
+        // The server refuses anything that close to the epoch as a value nobody can have
+        // meant, and it refuses it after the file has been written.
+        await Provider(httpClient).WriteAsync(
+            "/small.bin",
+            content,
+            times: new EntryTimes(DateTimeOffset.UnixEpoch.AddHours(3), s_modified),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Exchange only = Assert.Single(handler.Exchanges);
+        Assert.Equal(ModifiedSeconds, only.Modified);
+        Assert.Null(only.Created);
+    }
+
+    [Fact]
+    public async Task TheTimesRideOnTheAssemblingMoveAndOnNothingElse()
+    {
+        RecordingHandler handler = new();
+        using HttpClient httpClient = new(handler);
+        using MemoryStream content = new(Pattern((int)(ChunkSize * 2) + 7));
+
+        await Provider(httpClient).WriteAsync(
+            "/big.bin",
+            content,
+            times: new EntryTimes(s_created, s_modified),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        // The chunks are not the file, and the request that makes the file out of them is
+        // the one the server reads the times off.
+        Exchange move = handler.Exchanges[^1];
+        Assert.Equal("MOVE", move.Method);
+        Assert.Equal(ModifiedSeconds, move.Modified);
+        Assert.Equal(CreatedSeconds, move.Created);
+
+        Assert.All(
+            handler.Exchanges.SkipLast(1),
+            exchange =>
+            {
+                Assert.Null(exchange.Modified);
+                Assert.Null(exchange.Created);
+            });
+    }
+
+    [Fact]
+    public async Task SetTimesAsyncAsksForBothNamesAtOnce()
+    {
+        RecordingHandler handler = new(_ => HttpStatusCode.MultiStatus);
+        using HttpClient httpClient = new(handler);
+
+        await Provider(httpClient).SetTimesAsync(
+            "/small.bin",
+            new EntryTimes(s_created, s_modified),
+            TestContext.Current.CancellationToken);
+
+        Exchange only = Assert.Single(handler.Exchanges);
+        Assert.Equal("PROPPATCH", only.Method);
+
+        string document = Encoding.UTF8.GetString(only.Body.Span);
+
+        // The date-time of the protocol for the one, and the seconds the server inherited
+        // from ownCloud for the other, in the one request.
+        Assert.Contains("<creationdate>2024-05-06T07:08:09.0000000Z</creationdate>", document, StringComparison.Ordinal);
+        Assert.Contains($"<lastmodified>{ModifiedSeconds}</lastmodified>", document, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -154,7 +261,7 @@ public sealed class NextcloudProviderTests
         using HttpClient httpClient = new(handler);
         using MemoryStream content = new(Pattern((int)(ChunkSize * 2)));
 
-        await Provider(httpClient).WriteAsync("/big.bin", content, "\"abc123\"", TestContext.Current.CancellationToken);
+        await Provider(httpClient).WriteAsync("/big.bin", content, "\"abc123\"", cancellationToken: TestContext.Current.CancellationToken);
 
         Exchange only = Assert.Single(handler.Exchanges);
 
@@ -337,6 +444,10 @@ public sealed class NextcloudProviderTests
 
         public string? IfMatch { get; init; }
 
+        public string? Modified { get; init; }
+
+        public string? Created { get; init; }
+
         public ReadOnlyMemory<byte> Body { get; init; }
     }
 
@@ -344,6 +455,21 @@ public sealed class NextcloudProviderTests
     // matters is the order and the headers of the whole of it.
     private sealed class RecordingHandler : HttpMessageHandler
     {
+        // What the server answers a PROPPATCH it carried out with: each property named back
+        // under the status it was given.
+        private const string Written = """
+            <?xml version="1.0"?>
+            <d:multistatus xmlns:d="DAV:">
+              <d:response>
+                <d:href>/remote.php/dav/files/ernolf/small.bin</d:href>
+                <d:propstat>
+                  <d:prop><d:creationdate/><d:lastmodified/></d:prop>
+                  <d:status>HTTP/1.1 200 OK</d:status>
+                </d:propstat>
+              </d:response>
+            </d:multistatus>
+            """;
+
         private readonly Func<HttpRequestMessage, HttpStatusCode> _answer;
 
         private readonly Action<Exchange>? _onRequest;
@@ -363,6 +489,10 @@ public sealed class NextcloudProviderTests
 
         public List<Exchange> Exchanges { get; } = [];
 
+        // Put on every answer where it is given, because a write is worth its entity tag and
+        // only a handler that names one can be asked what became of it.
+        public string? ETag { get; init; }
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -379,13 +509,29 @@ public sealed class NextcloudProviderTests
                 TotalLength = Header(request, "OC-Total-Length"),
                 Overwrite = Header(request, "Overwrite"),
                 IfMatch = request.Headers.IfMatch.Count == 0 ? null : request.Headers.IfMatch.ToString(),
+                Modified = Header(request, "X-OC-MTime"),
+                Created = Header(request, "X-OC-CTime"),
                 Body = body,
             };
 
             Exchanges.Add(exchange);
             _onRequest?.Invoke(exchange);
 
-            return new HttpResponseMessage(_answer(request));
+            HttpResponseMessage answer = new(_answer(request));
+
+            // A 207 is only an answer once it carries the document that says what became of
+            // each property, which is the part the client reads.
+            if (answer.StatusCode == HttpStatusCode.MultiStatus)
+            {
+                answer.Content = new StringContent(Written, Encoding.UTF8, "application/xml");
+            }
+
+            if (ETag is not null)
+            {
+                answer.Headers.ETag = new EntityTagHeaderValue(ETag);
+            }
+
+            return answer;
         }
 
         private static string? Header(HttpRequestMessage request, string name) =>

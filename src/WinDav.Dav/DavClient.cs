@@ -23,8 +23,10 @@ public sealed class DavClient
     // from the writer and could end up declaring an encoding the body is not sent in.
     private const string XmlDeclaration = "<?xml version=\"1.0\" encoding=\"utf-8\"?>";
 
-    // HttpMethod knows the methods of RFC 9110; these four are not among them.
+    // HttpMethod knows the methods of RFC 9110; these five are not among them.
     private static readonly HttpMethod s_propFind = new("PROPFIND");
+
+    private static readonly HttpMethod s_propPatch = new("PROPPATCH");
 
     private static readonly HttpMethod s_mkCol = new("MKCOL");
 
@@ -116,6 +118,65 @@ public sealed class DavClient
         }
 
         return resources;
+    }
+
+    /// <summary>
+    /// Asks a server to write properties on a resource.
+    /// </summary>
+    /// <param name="uri">The resource to write them on.</param>
+    /// <param name="properties">
+    /// What to set, each as a name and the text that becomes the element's content. An
+    /// empty sequence is not sent: RFC 4918 section 9.2 wants at least one instruction.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>
+    /// What the server said, one entry per resource. A PROPPATCH answers 207 whether it
+    /// wrote the properties or refused them, and which of the two it was is in the status
+    /// beside each property, so the answer is handed back rather than reduced to a boolean.
+    /// </returns>
+    /// <exception cref="ArgumentException"><paramref name="properties"/> is empty.</exception>
+    /// <exception cref="HttpRequestException">The server did not answer with 207.</exception>
+    /// <exception cref="FormatException">The body is not a well formed multistatus.</exception>
+    public async Task<IReadOnlyList<DavResponse>> PropPatchAsync(
+        Uri uri,
+        IEnumerable<KeyValuePair<XName, string>> properties,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+        ArgumentNullException.ThrowIfNull(properties);
+
+        XElement[] written = [.. properties.Select(property => new XElement(property.Key, property.Value))];
+
+        if (written.Length == 0)
+        {
+            throw new ArgumentException("A PROPPATCH has to name at least one property.", nameof(properties));
+        }
+
+        string document = XmlDeclaration + new XElement(
+            DavNames.PropertyUpdate,
+            new XElement(DavNames.Set, new XElement(DavNames.Prop, written)))
+            .ToString(SaveOptions.DisableFormatting);
+
+        using HttpRequestMessage request = new(s_propPatch, uri)
+        {
+            Content = new StringContent(document, Encoding.UTF8, "application/xml"),
+        };
+
+        using HttpResponseMessage response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+
+        // The same reasoning as on PROPFIND: 207 is the only answer that carries what was
+        // asked for, and any other 2xx is the server having done something else.
+        if (response.StatusCode != HttpStatusCode.MultiStatus)
+        {
+            throw new HttpRequestException(
+                $"PROPPATCH {uri} expected 207 Multi-Status but the server answered {(int)response.StatusCode}.",
+                inner: null,
+                statusCode: response.StatusCode);
+        }
+
+        using Stream body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+
+        return await MultiStatusParser.ParseAsync(body, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

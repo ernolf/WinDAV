@@ -215,7 +215,11 @@ public sealed class FolderPickerTests
             string path,
             Stream content,
             string? ifMatch = null,
+            EntryTimes times = default,
             CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
         public Task<string?> CreateFileAsync(string path, CancellationToken cancellationToken = default) =>

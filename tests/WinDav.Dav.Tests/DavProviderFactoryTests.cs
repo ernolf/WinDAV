@@ -298,7 +298,15 @@ public sealed class DavProviderFactoryTests
         public Task<Stream> OpenReadAsync(string path, long offset, long? count, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<string?> WriteAsync(string path, Stream content, string? ifMatch, CancellationToken cancellationToken) =>
+        public Task<string?> WriteAsync(
+            string path,
+            Stream content,
+            string? ifMatch,
+            EntryTimes times,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
         public Task<string?> CreateFileAsync(string path, CancellationToken cancellationToken) =>

@@ -29,9 +29,13 @@ internal sealed class FakeStore : IStorageProvider
     // test about the read path counts.
     public List<(long Offset, long? Count)> Reads { get; } = [];
 
-    // What was written, in order: where it went, the bytes, and the entity tag the write
-    // was made conditional on. One entry is one upload.
-    public List<(string Path, byte[] Content, string? IfMatch)> Writes { get; } = [];
+    // What was written, in order: where it went, the bytes, the entity tag the write was
+    // made conditional on, and the times it was to carry. One entry is one upload.
+    public List<(string Path, byte[] Content, string? IfMatch, EntryTimes Times)> Writes { get; } = [];
+
+    // Every time the times were set on their own, in order. One entry is one request that
+    // would not have been made had they travelled with an upload.
+    public List<(string Path, EntryTimes Times)> TimesSet { get; } = [];
 
     public long LastOffset { get; private set; }
 
@@ -178,6 +182,7 @@ internal sealed class FakeStore : IStorageProvider
         string path,
         Stream content,
         string? ifMatch,
+        EntryTimes times,
         CancellationToken cancellationToken)
     {
         Fail();
@@ -193,9 +198,24 @@ internal sealed class FakeStore : IStorageProvider
 
         byte[] bytes = taken.ToArray();
 
-        Writes.Add((path, bytes, ifMatch));
+        Writes.Add((path, bytes, ifMatch, times));
 
-        return Store(path, bytes);
+        // Like a store that takes the times on the request that writes the file: no second
+        // request, and the entity tag it answers with is still good afterwards.
+        return Store(path, bytes, times);
+    }
+
+    public Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken)
+    {
+        Fail();
+
+        RemoteEntry entry = Find(path);
+
+        TimesSet.Add((path, times));
+
+        _entries[path] = Timed(entry, times);
+
+        return Task.CompletedTask;
     }
 
     public Task CreateDirectoryAsync(string path, CancellationToken cancellationToken)
@@ -317,11 +337,31 @@ internal sealed class FakeStore : IStorageProvider
 
     // What a store does on every write: the entry is what it now is, and it carries a tag
     // that stands for this version and no other.
-    private string Store(string path, byte[] bytes)
+    // The entry as it is once the times it was given have been written into it, leaving
+    // whatever was already there where a time was not named.
+    private static RemoteEntry Timed(RemoteEntry entry, EntryTimes times) =>
+        new(entry.Path, entry.IsDirectory)
+        {
+            Length = entry.Length,
+            Id = entry.Id,
+            Permissions = entry.Permissions,
+            ETag = entry.ETag,
+            Created = times.Created ?? entry.Created,
+            LastModified = times.LastModified ?? entry.LastModified,
+        };
+
+    private string Store(string path, byte[] bytes, EntryTimes times = default)
     {
         string eTag = $"v{++_version}";
 
-        _entries[path] = new RemoteEntry(path, false) { Length = bytes.Length, ETag = eTag };
+        _entries[path] = new RemoteEntry(path, false)
+        {
+            Length = bytes.Length,
+            ETag = eTag,
+            Created = times.Created,
+            LastModified = times.LastModified,
+        };
+
         _content[path] = bytes;
 
         return eTag;
