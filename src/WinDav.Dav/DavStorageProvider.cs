@@ -23,7 +23,7 @@ namespace WinDav.Dav;
 /// (<see cref="RequestedProperties"/>), what two of them mean
 /// (<see cref="ReadId(DavResource)"/> and <see cref="ReadPermissions(DavResource)"/>), what
 /// a described resource becomes as a whole (<see cref="ToEntry"/>), how bytes are written
-/// (<see cref="WriteAsync(string, Stream, string?, EntryTimes, CancellationToken)"/>) and
+/// (<see cref="WriteAsync(string, Stream, string?, EntryTimes, bool, CancellationToken)"/>) and
 /// which properties carry the times (<see cref="TimeProperties"/>).
 /// Everything else is the protocol, which is the same everywhere.
 /// </para>
@@ -198,6 +198,7 @@ public abstract class DavStorageProvider : IStorageProvider
         Stream content,
         string? ifMatch = null,
         EntryTimes times = default,
+        bool mustBeNew = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -208,12 +209,18 @@ public abstract class DavStorageProvider : IStorageProvider
         try
         {
             eTag = await Client
-                .PutAsync(uri, content, contentType: null, ifMatch, cancellationToken: cancellationToken)
+                .PutAsync(
+                    uri,
+                    content,
+                    contentType: null,
+                    ifMatch,
+                    ifNoneMatch: mustBeNew ? "*" : null,
+                    cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (HttpRequestException exception)
         {
-            throw Failed($"Writing {DavPath.Normalise(path)}", exception);
+            throw Failed($"Writing {DavPath.Normalise(path)}", exception, Occupied(exception, mustBeNew));
         }
 
         return await WriteTimesAsync(path, times, cancellationToken).ConfigureAwait(false) ? null : eTag;
@@ -514,6 +521,15 @@ public abstract class DavStorageProvider : IStorageProvider
     // Whether the server wrote any of what it was sent. A property it will not have comes
     // back in a propstat of its own with a status outside 2xx, so one accepted property is
     // enough to say the request was worth sending.
+    // A 412 means one of two things and the request that got it says which. Where the write
+    // asked to be the one that makes the name, the server is saying somebody else made it and
+    // that nothing has been written; where it named a version, it is saying the version has
+    // moved on. Only the first is a name already taken.
+    private static ProviderError? Occupied(HttpRequestException exception, bool mustBeNew) =>
+        mustBeNew && exception.StatusCode == HttpStatusCode.PreconditionFailed
+            ? ProviderError.AlreadyExists
+            : null;
+
     private static bool Accepted(IReadOnlyList<DavResponse> answered, KeyValuePair<XName, string>[] properties)
     {
         foreach (DavResponse response in answered)

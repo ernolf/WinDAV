@@ -3,6 +3,7 @@
 
 using System.Buffers;
 using System.Globalization;
+using System.Net;
 using System.Xml.Linq;
 using WinDav.Abstractions;
 using WinDav.Dav;
@@ -24,7 +25,7 @@ namespace WinDav.Providers.Nextcloud;
 /// </para>
 /// <para>
 /// The chunked path is used only when it can be used safely; see
-/// <see cref="WriteAsync(string, Stream, string?, EntryTimes, CancellationToken)"/> for the
+/// <see cref="WriteAsync(string, Stream, string?, EntryTimes, bool, CancellationToken)"/> for the
 /// three cases that fall back to a single PUT.
 /// </para>
 /// <para>
@@ -201,6 +202,7 @@ public sealed class NextcloudProvider : DavStorageProvider
     /// <param name="content">The bytes to write.</param>
     /// <param name="ifMatch">See <see cref="DavStorageProvider.WriteAsync"/>.</param>
     /// <param name="times">See <see cref="DavStorageProvider.WriteAsync"/>.</param>
+    /// <param name="mustBeNew">See <see cref="DavStorageProvider.WriteAsync"/>.</param>
     /// <param name="cancellationToken">Cancels the upload and clears up after it.</param>
     /// <returns>
     /// The entity tag when the server stated one. A chunked upload has none: the answer that
@@ -208,11 +210,13 @@ public sealed class NextcloudProvider : DavStorageProvider
     /// </returns>
     /// <remarks>
     /// <para>
-    /// Three cases go out as a single PUT instead. A stream that cannot be measured has no
+    /// Four cases go out as a single PUT instead. A stream that cannot be measured has no
     /// total length to declare, and the server needs one. A file no larger than one chunk
-    /// would be a PUT with three extra requests around it. And an <paramref name="ifMatch"/>
-    /// has nowhere to go in the chunked exchange, so honouring it would mean dropping it,
-    /// which turns a guarded write into a lost update.
+    /// would be a PUT with three extra requests around it. And neither an
+    /// <paramref name="ifMatch"/> nor a <paramref name="mustBeNew"/> has anywhere to go in
+    /// the chunked exchange, so honouring either would mean dropping it, which turns a
+    /// guarded write into a lost update and a name being claimed into a name being taken
+    /// from somebody.
     /// </para>
     /// <para>
     /// The times ride on the request that writes the file, which is the PUT here and the
@@ -226,15 +230,16 @@ public sealed class NextcloudProvider : DavStorageProvider
         Stream content,
         string? ifMatch = null,
         EntryTimes times = default,
+        bool mustBeNew = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(content);
 
         long? length = content.CanSeek ? content.Length - content.Position : null;
 
-        if (ifMatch is not null || length is null || length.Value <= _chunkSize)
+        if (ifMatch is not null || mustBeNew || length is null || length.Value <= _chunkSize)
         {
-            return await PutAsync(path, content, ifMatch, times, cancellationToken).ConfigureAwait(false);
+            return await PutAsync(path, content, ifMatch, times, mustBeNew, cancellationToken).ConfigureAwait(false);
         }
 
         await UploadInChunksAsync(path, content, length.Value, times, cancellationToken).ConfigureAwait(false);
@@ -371,6 +376,7 @@ public sealed class NextcloudProvider : DavStorageProvider
         Stream content,
         string? ifMatch,
         EntryTimes times,
+        bool mustBeNew,
         CancellationToken cancellationToken)
     {
         Uri uri = DavPath.ToUri(BaseUri, path);
@@ -384,13 +390,20 @@ public sealed class NextcloudProvider : DavStorageProvider
                     content,
                     contentType: null,
                     ifMatch,
+                    ifNoneMatch: mustBeNew ? "*" : null,
                     headers: headers.Length == 0 ? null : headers,
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (HttpRequestException exception)
         {
-            throw Failed($"Writing {DavPath.Normalise(path)}", exception);
+            // The same reading of a 412 the base class makes: a write that asked to be the
+            // one making the name has been told the name is taken.
+            ProviderError? occupied = mustBeNew && exception.StatusCode == HttpStatusCode.PreconditionFailed
+                ? ProviderError.AlreadyExists
+                : null;
+
+            throw Failed($"Writing {DavPath.Normalise(path)}", exception, occupied);
         }
     }
 

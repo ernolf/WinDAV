@@ -390,12 +390,10 @@ public sealed class WinDavFileSystemTests
         Assert.NotNull(fileDesc);
         Assert.Equal(0UL, fileInfo.FileSize);
 
-        // The name is claimed here and not at the upload, which is what gives a permission
-        // refused, a name already taken and a store with no room somewhere to be reported.
-        RemoteEntry? made = store.At("/new.txt");
-
-        Assert.NotNull(made);
-        Assert.False(made.IsDirectory);
+        // What Windows is told about a name the store has never heard of, which is what a
+        // file just made is: a file and not a directory, and nothing in it. See decision 86.
+        Assert.Equal((uint)FileAttributes.Normal, fileInfo.FileAttributes);
+        Assert.Null(store.At("/new.txt"));
 
         fileSystem.Close(null, fileDesc);
     }
@@ -415,6 +413,177 @@ public sealed class WinDavFileSystemTests
             CreateFile(fileSystem, "\\note.txt", out _, out _));
 
         Assert.Equal("hello", store.ContentOf("/note.txt"));
+    }
+
+    [Fact]
+    public void AFileIsNotSentWhenItIsMadeButWhenItIsLetGo()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\new.txt", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        // Nothing has gone out. An upload here would be an upload of nothing, made worthless
+        // a moment later by the one that carries the contents.
+        Assert.Empty(store.Writes);
+        Assert.Null(store.At("/new.txt"));
+
+        WriteAt(fileSystem, fileDesc, 0, "hello");
+
+        fileSystem.Cleanup(null, fileDesc, @"\new.txt", 0);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Equal("hello", store.ContentOf("/new.txt"));
+        Assert.True(Assert.Single(store.Writes).MustBeNew);
+    }
+
+    [Fact]
+    public void AFileMadeAndLetGoWithNothingInItStillReachesTheStore()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\empty.txt", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        fileSystem.Cleanup(null, fileDesc, @"\empty.txt", 0);
+        fileSystem.Close(null, fileDesc);
+
+        // One upload rather than none: a file nobody wrote a byte into is still a file.
+        Assert.Empty(Assert.Single(store.Writes).Content);
+        Assert.NotNull(store.At("/empty.txt"));
+    }
+
+    [Fact]
+    public void AWriteOntoAFileThatIsAlreadyThereDoesNotAskToBeTheOneMakingIt()
+    {
+        FakeStore store = new();
+        store.AddFile("/note.txt", "hello");
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        object fileDesc = OpenExisting(fileSystem, @"\note.txt");
+
+        WriteAt(fileSystem, fileDesc, 0, "HELLO");
+
+        Assert.Equal(FileSystemBase.STATUS_SUCCESS, fileSystem.Flush(null, fileDesc, out _));
+
+        Assert.False(Assert.Single(store.Writes).MustBeNew);
+    }
+
+    [Fact]
+    public void ANameMadeHereIsThereBeforeTheStoreHasHeardOfIt()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\new.txt", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        byte[]? descriptor = null;
+
+        // Windows has been told the file exists, so the mount has to keep saying so while it
+        // is the only one that knows.
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.GetSecurityByName(@"\new.txt", out uint attributes, ref descriptor));
+
+        Assert.Equal((uint)FileAttributes.Normal, attributes);
+    }
+
+    [Fact]
+    public void ASecondCreateOfANameMadeHereIsACollision()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\new.txt", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        // The answer a store that already had the name would have given, which is the one
+        // WinFsp turns into an Open of what is there.
+        Assert.Equal(
+            FileSystemBase.STATUS_OBJECT_NAME_COLLISION,
+            CreateFile(fileSystem, @"\new.txt", out _, out _));
+    }
+
+    [Fact]
+    public void AFileMadeAndTakenAwayAgainNeverReachesTheStore()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\scratch.tmp", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        WriteAt(fileSystem, fileDesc, 0, "hello");
+
+        fileSystem.Cleanup(null, fileDesc, @"\scratch.tmp", FileSystemBase.CleanupDelete);
+        fileSystem.Close(null, fileDesc);
+
+        // Neither the upload nor the delete: the store was never told the name, so there is
+        // nothing there to write and nothing there to take away.
+        Assert.Empty(store.Writes);
+        Assert.Null(store.At("/scratch.tmp"));
+
+        // And the name is free again.
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\scratch.tmp", out object? again, out _));
+
+        Assert.NotNull(again);
+
+        fileSystem.Close(null, again);
+    }
+
+    [Fact]
+    public void AFileMadeHereIsSentBeforeItIsMoved()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\new.txt", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        WriteAt(fileSystem, fileDesc, 0, "hello");
+
+        // A name the store has not been given has nothing there to move, so what the handle
+        // holds goes up first and the move then has something to move.
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.Rename(null, fileDesc, @"\new.txt", @"\note.txt", false));
+
+        fileSystem.Cleanup(null, fileDesc, @"\note.txt", 0);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Equal("hello", store.ContentOf("/note.txt"));
+        Assert.Null(store.At("/new.txt"));
+        Assert.Single(store.Writes);
     }
 
     [Fact]

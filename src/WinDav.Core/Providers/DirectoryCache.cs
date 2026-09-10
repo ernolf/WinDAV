@@ -394,6 +394,7 @@ public sealed class DirectoryCache : IStorageProvider
         Stream content,
         string? ifMatch = null,
         EntryTimes times = default,
+        bool mustBeNew = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(path);
@@ -405,7 +406,8 @@ public sealed class DirectoryCache : IStorageProvider
 
         try
         {
-            eTag = await _inner.WriteAsync(path, content, ifMatch, times, cancellationToken).ConfigureAwait(false);
+            eTag = await _inner.WriteAsync(path, content, ifMatch, times, mustBeNew, cancellationToken)
+                .ConfigureAwait(false);
         }
         catch
         {

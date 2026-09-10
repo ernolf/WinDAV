@@ -168,11 +168,12 @@ public sealed class AttributeCache : IStorageProvider
         Stream content,
         string? ifMatch = null,
         EntryTimes times = default,
+        bool mustBeNew = false,
         CancellationToken cancellationToken = default)
     {
         try
         {
-            return await _inner.WriteAsync(path, content, ifMatch, times, cancellationToken)
+            return await _inner.WriteAsync(path, content, ifMatch, times, mustBeNew, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
