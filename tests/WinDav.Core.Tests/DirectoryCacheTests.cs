@@ -2144,6 +2144,7 @@ public sealed class DirectoryCacheTests
             Stream content,
             string? ifMatch = null,
             EntryTimes times = default,
+            bool mustBeNew = false,
             CancellationToken cancellationToken = default)
         {
             if (RefuseWrites)

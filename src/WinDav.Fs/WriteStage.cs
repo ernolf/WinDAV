@@ -58,10 +58,34 @@ internal sealed class WriteStage : IDisposable
     }
 
     /// <summary>
+    /// Initialises a new instance of the <see cref="WriteStage"/> class for a name the store
+    /// has not been given yet.
+    /// </summary>
+    /// <remarks>
+    /// It stands pending with nothing in it, so that a file made and closed again without a
+    /// byte ever going into it still reaches the store, as one upload rather than none. There
+    /// is no version to make it conditional on, because there is nothing there yet to have
+    /// one; what stands in its place is the store being asked to refuse the write if the name
+    /// has been taken in the meantime.
+    /// </remarks>
+    internal WriteStage()
+        : this(eTag: null)
+    {
+        MustBeNew = true;
+        Pending = true;
+    }
+
+    /// <summary>
     /// Gets the version the next upload is made conditional on, or <see langword="null"/>
     /// when there is none to name.
     /// </summary>
     internal string? ETag { get; private set; }
+
+    /// <summary>
+    /// Gets a value indicating whether the store still has to be told this name at all, so
+    /// that the next upload is the one that makes it and has to refuse to overwrite.
+    /// </summary>
+    internal bool MustBeNew { get; private set; }
 
     /// <summary>
     /// Gets a value indicating whether there is something here the store has not got.
@@ -201,6 +225,7 @@ internal sealed class WriteStage : IDisposable
     {
         ETag = eTag;
         Pending = false;
+        MustBeNew = false;
     }
 
     /// <inheritdoc/>

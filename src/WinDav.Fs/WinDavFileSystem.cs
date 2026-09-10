@@ -82,6 +82,9 @@ public sealed class WinDavFileSystem : FileSystemBase
     private readonly MountSettings _settings;
     private readonly ILogger _log;
     private readonly ReadLayer _reads;
+
+    // The names made here and not sent yet. See decision 86 and HeldNames.
+    private readonly HeldNames _held = new();
     private readonly byte[] _security;
     private readonly ulong _mountTime = (ulong)DateTime.UtcNow.ToFileTimeUtc();
 
@@ -241,7 +244,9 @@ public sealed class WinDavFileSystem : FileSystemBase
 
         try
         {
-            RemoteEntry entry = Await(_provider.GetAsync(path));
+            // A name this mount holds and the store has never heard of. Asked about it, the
+            // store would say there is nothing there, and Windows has been told there is.
+            RemoteEntry entry = _held.Find(path) ?? Await(_provider.GetAsync(path));
 
             fileAttributes = AttributesOf(entry);
 
@@ -276,9 +281,11 @@ public sealed class WinDavFileSystem : FileSystemBase
     }
 
     // A directory or a file: Windows asks for both through this one call and says which in
-    // the options. Either is made in the store before this returns, so that a name already
-    // taken, a permission refused and a store with no room are answered where Windows can
-    // still show them to somebody. See decision 86.
+    // the options. A directory is made in the store before this returns, because there is
+    // nothing else coming that would make it. A file is not: what would go out here is an
+    // upload of nothing, made worthless a moment later by the upload of the contents, so the
+    // name is held on this side and the one upload that follows is the one that makes it.
+    // See decision 86.
     /// <inheritdoc/>
     public override int Create(
         string fileName,
@@ -311,30 +318,68 @@ public sealed class WinDavFileSystem : FileSystemBase
 
         try
         {
+            RemoteEntry entry;
+
             if (directory)
             {
                 Await(_provider.CreateDirectoryAsync(path));
+
+                // What the store answers to the making of a directory says nothing about it,
+                // and the handle being opened has to carry an entry. Asked for rather than
+                // made up: the times and what may be done with it are the store's to say, and
+                // this is the entry an Open a moment later would be given.
+                entry = Await(_provider.GetAsync(path));
+
+                fileDesc = new OpenEntry(path, entry, _reads.Open(path, entry.Length));
             }
             else
             {
-                // Empty: what this handle is about to write goes out when it lets go. What
-                // the call is for is the name, and a store that already has it answers with
-                // the collision WinFsp turns into an Open of what is there.
-                Await(_provider.CreateFileAsync(path));
-            }
+                // The name, which is what the call is for. Something already under it is the
+                // collision WinFsp turns into an Open of what is there, and it is answered
+                // without an upload of nothing having to go out to provoke it.
+                if (Taken(path))
+                {
+                    return STATUS_OBJECT_NAME_COLLISION;
+                }
 
-            // What the store answers to the making of an entry says nothing about it, and
-            // the handle being opened has to carry one. Asked for rather than made up:
-            // the times and what may be done with it are the store's to say, and this is the
-            // entry an Open a moment later would be given.
-            RemoteEntry entry = Await(_provider.GetAsync(path));
+                // Made up rather than asked for, because there is nothing at the store to ask:
+                // what a file just made is, which is empty and dated now. Both are replaced by
+                // what actually happens — the length by what gets written, the times by what
+                // Windows sets on the handle — before anything is sent.
+                DateTimeOffset now = DateTimeOffset.UtcNow;
+
+                entry = new RemoteEntry(path, isDirectory: false)
+                {
+                    Length = 0,
+                    Created = now,
+                    LastModified = now,
+                };
+
+                // Opened here rather than at the first write, and pending from the start: a
+                // file made and closed again untouched is still a file, and the one upload
+                // that carries it is the one that would have carried its contents.
+                WriteStage stage = new();
+
+                // Another handle that got the name first is the same collision.
+                if (!_held.Claim(path, entry))
+                {
+                    stage.Dispose();
+
+                    return STATUS_OBJECT_NAME_COLLISION;
+                }
+
+                // Emptied, because it was just made: a write to part of it has nothing to
+                // fetch.
+                fileDesc = new OpenEntry(path, entry, _reads.Open(path, entry.Length))
+                {
+                    Emptied = true,
+                    Stage = stage,
+                };
+            }
 
             // The attributes, the descriptor and the size that were asked for are dropped. An
             // entry in a store like this has nowhere to keep any of them, and the volume
             // hands out one descriptor for everything it is asked about.
-            //
-            // Emptied, because it was just made: a write to part of it has nothing to fetch.
-            fileDesc = new OpenEntry(path, entry, _reads.Open(path, entry.Length)) { Emptied = true };
             fileInfo = ToFileInfo(entry);
 
             if (_log.IsEnabled(LogLevel.Debug))
@@ -390,7 +435,10 @@ public sealed class WinDavFileSystem : FileSystemBase
 
         try
         {
-            RemoteEntry entry = Await(_provider.GetAsync(path));
+            // For the reason GetSecurityByName reads it: a name the store has not been given
+            // yet is one only this side knows about.
+            RemoteEntry? made = _held.Find(path);
+            RemoteEntry entry = made ?? Await(_provider.GetAsync(path));
 
             if (entry.IsDirectory && (createOptions & FILE_NON_DIRECTORY_FILE) != 0)
             {
@@ -409,7 +457,14 @@ public sealed class WinDavFileSystem : FileSystemBase
                 return Refused("Open with delete on close");
             }
 
-            fileDesc = new OpenEntry(path, entry, _reads.Open(path, entry.Length));
+            // Emptied where the name is only held here: there is nothing at the store to
+            // fetch before a write to part of the file, and asking would be a request for a
+            // name the store does not have.
+            fileDesc = new OpenEntry(path, entry, _reads.Open(path, entry.Length))
+            {
+                Emptied = made is not null,
+            };
+
             fileInfo = ToFileInfo(entry);
 
             // Decision 84: here and nowhere else. WinFsp has an originating process during
@@ -650,6 +705,21 @@ public sealed class WinDavFileSystem : FileSystemBase
             return;
         }
 
+        // Made here and taken away again without ever being sent, which is what a program
+        // does with a file it writes and then thinks better of. Nothing is at the store to
+        // delete, and asking would be a request for a name it has never heard of.
+        if (open.Stage is { MustBeNew: true })
+        {
+            _held.Release(open.Path);
+
+            if (_log.IsEnabled(LogLevel.Debug))
+            {
+                _log.LogDebug("Dropped {Path} before it was ever sent.", open.Path);
+            }
+
+            return;
+        }
+
         try
         {
             Await(_provider.DeleteAsync(open.Path));
@@ -682,6 +752,15 @@ public sealed class WinDavFileSystem : FileSystemBase
         if (fileDesc is OpenEntry open)
         {
             open.Window.Close();
+
+            // Let go whether the upload happened or not: where it did, the store answers for
+            // the name; where it did not, Windows has already been told the file is saved and
+            // this side has nothing left to answer with.
+            if (open.Stage is { MustBeNew: true })
+            {
+                _held.Release(open.Path);
+            }
+
             open.Stage?.Dispose();
 
             if (open.Entry.IsDirectory)
@@ -709,6 +788,15 @@ public sealed class WinDavFileSystem : FileSystemBase
 
         try
         {
+            // A name the store has not been given yet has nothing there to move. What the
+            // handle holds goes up under the old name first, which is the upload the close
+            // would have made, and the move then has something to move. This call can say
+            // that it failed, which the close cannot.
+            if (fileDesc is OpenEntry made && made.Stage is { MustBeNew: true })
+            {
+                Send(made);
+            }
+
             Await(_provider.MoveAsync(source, destination, replaceIfExists));
 
             if (_log.IsEnabled(LogLevel.Debug))
@@ -1192,6 +1280,28 @@ public sealed class WinDavFileSystem : FileSystemBase
         }
     }
 
+    // Whether anything is under a name already, at the store or held on this side. It is the
+    // question GetSecurityByName asked a moment before every Create, so the listing that
+    // answered it answers this one as well and no request goes out for it.
+    private bool Taken(string path)
+    {
+        if (_held.Find(path) is not null)
+        {
+            return true;
+        }
+
+        try
+        {
+            Await(_provider.GetAsync(path));
+
+            return true;
+        }
+        catch (ProviderException exception) when (exception.Error == ProviderError.NotFound)
+        {
+            return false;
+        }
+    }
+
     private string ToRemotePath(string fileName)
     {
         // WinFsp names paths the way the kernel does: backslashes, and a bare one for the
@@ -1277,7 +1387,16 @@ public sealed class WinDavFileSystem : FileSystemBase
         // The times go with every upload from this handle and are not cleared once they
         // have gone. A program that has set a time has said what the file is to carry, and
         // an upload that left them out would put the time of the upload there instead.
-        stage.Delivered(Await(_provider.WriteAsync(open.Path, stage.Rewound(), stage.ETag, open.Times)));
+        //
+        // MustBeNew where the store has not been given this name at all. It is the upload
+        // that makes it, and the store is asked to refuse rather than overwrite, so that
+        // somebody who got there first is a collision and not a lost file.
+        stage.Delivered(
+            Await(_provider.WriteAsync(open.Path, stage.Rewound(), stage.ETag, open.Times, stage.MustBeNew)));
+
+        // The store has the name now, so what was answered from this side is answered from
+        // the store again.
+        _held.Release(open.Path);
 
         if (_log.IsEnabled(LogLevel.Debug))
         {

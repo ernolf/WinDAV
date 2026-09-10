@@ -216,6 +216,7 @@ public sealed class FolderPickerTests
             Stream content,
             string? ifMatch = null,
             EntryTimes times = default,
+            bool mustBeNew = false,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 

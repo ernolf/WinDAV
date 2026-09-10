@@ -90,6 +90,13 @@ public interface IStorageProvider
     /// <see cref="SetTimesAsync"/> would. Empty is the caller saying nothing about them,
     /// and then the file carries whatever the store gives it.
     /// </param>
+    /// <param name="mustBeNew">
+    /// Whether the write is only to happen where nothing is there yet. It is how a file
+    /// that Windows has just made reaches the store: the name is taken and the contents are
+    /// put there in one request, and somebody who got there first is a collision rather
+    /// than an overwrite nobody notices. It has no meaning together with
+    /// <paramref name="ifMatch"/>, which asks for the opposite.
+    /// </param>
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>
     /// The entity tag of what was written, or <see langword="null"/> when the store did not
@@ -98,13 +105,16 @@ public interface IStorageProvider
     /// </returns>
     /// <exception cref="ProviderException">
     /// <see cref="ProviderError.PreconditionFailed"/> when <paramref name="ifMatch"/> no
-    /// longer holds, which is somebody else having written first.
+    /// longer holds, which is somebody else having written first, and
+    /// <see cref="ProviderError.AlreadyExists"/> when <paramref name="mustBeNew"/> was
+    /// asked for and something is there.
     /// </exception>
     Task<string?> WriteAsync(
         string path,
         Stream content,
         string? ifMatch = null,
         EntryTimes times = default,
+        bool mustBeNew = false,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -140,9 +150,9 @@ public interface IStorageProvider
     /// </returns>
     /// <remarks>
     /// The counterpart of <see cref="CreateDirectoryAsync"/>: the same question asked about a
-    /// file. It is separate from <see cref="WriteAsync"/>, which takes whatever is there,
-    /// because a name that is already taken, a permission refused and a store with no room
-    /// are worth finding out before any contents have been written.
+    /// file. A mount does not make its files this way — it holds the name itself until there
+    /// is something to send and then writes once, with <c>mustBeNew</c>. What is left for
+    /// this is a caller that wants the name taken and nothing in it.
     /// </remarks>
     /// <exception cref="ProviderException">
     /// <see cref="ProviderError.AlreadyExists"/> when something is already there,

@@ -414,6 +414,43 @@ public sealed class WebDavProviderTests
     }
 
     [Fact]
+    public async Task AWriteThatHasToMakeTheNameRefusesToOverwrite()
+    {
+        RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.Created));
+        using HttpClient httpClient = new(handler);
+        using MemoryStream content = new(Encoding.UTF8.GetBytes(Bytes));
+
+        await Provider(httpClient).WriteAsync(
+            "/a note.txt",
+            content,
+            mustBeNew: true,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        // The star, which is the server being asked to write only where nothing is there.
+        Assert.Equal("PUT", handler.Method);
+        Assert.Equal("*", handler.IfNoneMatch);
+        Assert.Null(handler.IfMatch);
+    }
+
+    [Fact]
+    public async Task AFailedPreconditionOnAWriteThatHadToMakeTheNameIsATakenName()
+    {
+        using HttpClient httpClient = new(new RecordingHandler(new HttpResponseMessage(HttpStatusCode.PreconditionFailed)));
+        using MemoryStream content = new(Encoding.UTF8.GetBytes(Bytes));
+
+        // The same status as a lost update and a different thing said with it: the condition
+        // this write carried was that nothing be there.
+        ProviderException exception = await Assert.ThrowsAsync<ProviderException>(
+            () => Provider(httpClient).WriteAsync(
+                "/a note.txt",
+                content,
+                mustBeNew: true,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(ProviderError.AlreadyExists, exception.Error);
+    }
+
+    [Fact]
     public async Task WriteAsyncFollowsTheUploadWithTheCreationDate()
     {
         ScriptedHandler handler = new(
@@ -679,6 +716,8 @@ public sealed class WebDavProviderTests
 
         public string? IfMatch { get; private set; }
 
+        public string? IfNoneMatch { get; private set; }
+
         public string? Body { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -690,6 +729,7 @@ public sealed class WebDavProviderTests
             Destination = Header(request, "Destination");
             Overwrite = Header(request, "Overwrite");
             IfMatch = request.Headers.IfMatch.Count == 0 ? null : request.Headers.IfMatch.ToString();
+            IfNoneMatch = request.Headers.IfNoneMatch.Count == 0 ? null : request.Headers.IfNoneMatch.ToString();
 
             if (request.Content is not null)
             {

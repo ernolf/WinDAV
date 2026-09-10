@@ -270,6 +270,21 @@ public sealed class NextcloudProviderTests
     }
 
     [Fact]
+    public async Task AWriteThatHasToMakeTheNameGoesOutAsASinglePutSoTheConditionSurvives()
+    {
+        RecordingHandler handler = new();
+        using HttpClient httpClient = new(handler);
+        using MemoryStream content = new(Pattern((int)(ChunkSize * 2)));
+
+        await Provider(httpClient).WriteAsync("/big.bin", content, mustBeNew: true, cancellationToken: TestContext.Current.CancellationToken);
+
+        Exchange only = Assert.Single(handler.Exchanges);
+
+        Assert.Equal("PUT", only.Method);
+        Assert.Equal("*", only.IfNoneMatch);
+    }
+
+    [Fact]
     public async Task AFailedChunkTakesTheUploadDirectoryWithIt()
     {
         RecordingHandler handler = new(request =>
@@ -444,6 +459,8 @@ public sealed class NextcloudProviderTests
 
         public string? IfMatch { get; init; }
 
+        public string? IfNoneMatch { get; init; }
+
         public string? Modified { get; init; }
 
         public string? Created { get; init; }
@@ -509,6 +526,7 @@ public sealed class NextcloudProviderTests
                 TotalLength = Header(request, "OC-Total-Length"),
                 Overwrite = Header(request, "Overwrite"),
                 IfMatch = request.Headers.IfMatch.Count == 0 ? null : request.Headers.IfMatch.ToString(),
+                IfNoneMatch = request.Headers.IfNoneMatch.Count == 0 ? null : request.Headers.IfNoneMatch.ToString(),
                 Modified = Header(request, "X-OC-MTime"),
                 Created = Header(request, "X-OC-CTime"),
                 Body = body,

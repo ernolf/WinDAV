@@ -30,8 +30,9 @@ internal sealed class FakeStore : IStorageProvider
     public List<(long Offset, long? Count)> Reads { get; } = [];
 
     // What was written, in order: where it went, the bytes, the entity tag the write was
-    // made conditional on, and the times it was to carry. One entry is one upload.
-    public List<(string Path, byte[] Content, string? IfMatch, EntryTimes Times)> Writes { get; } = [];
+    // made conditional on, the times it was to carry, and whether it was the write that had
+    // to make the name. One entry is one upload.
+    public List<(string Path, byte[] Content, string? IfMatch, EntryTimes Times, bool MustBeNew)> Writes { get; } = [];
 
     // Every time the times were set on their own, in order. One entry is one request that
     // would not have been made had they travelled with an upload.
@@ -183,6 +184,7 @@ internal sealed class FakeStore : IStorageProvider
         Stream content,
         string? ifMatch,
         EntryTimes times,
+        bool mustBeNew,
         CancellationToken cancellationToken)
     {
         Fail();
@@ -192,13 +194,18 @@ internal sealed class FakeStore : IStorageProvider
             throw new ProviderException(ProviderError.PreconditionFailed);
         }
 
+        if (mustBeNew && _entries.ContainsKey(path))
+        {
+            throw new ProviderException(ProviderError.AlreadyExists);
+        }
+
         using MemoryStream taken = new();
 
         await content.CopyToAsync(taken, cancellationToken).ConfigureAwait(false);
 
         byte[] bytes = taken.ToArray();
 
-        Writes.Add((path, bytes, ifMatch, times));
+        Writes.Add((path, bytes, ifMatch, times, mustBeNew));
 
         // Like a store that takes the times on the request that writes the file: no second
         // request, and the entity tag it answers with is still good afterwards.

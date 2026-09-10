@@ -303,6 +303,7 @@ public sealed class DavProviderFactoryTests
             Stream content,
             string? ifMatch,
             EntryTimes times,
+            bool mustBeNew,
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
