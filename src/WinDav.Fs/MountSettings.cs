@@ -14,6 +14,16 @@ namespace WinDav.Fs;
 public sealed class MountSettings
 {
     /// <summary>
+    /// How long nothing may have been written under a directory before the times it was
+    /// given are set again, by default.
+    /// </summary>
+    /// <remarks>
+    /// Long enough that the pause between two files of a copy never reaches it, short enough
+    /// that a directory carries the right date by the time anybody looks at it.
+    /// </remarks>
+    public static readonly TimeSpan DefaultDirectoryQuiet = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Gets the path in the store that becomes the root of the mount.
     /// </summary>
     /// <remarks>
@@ -84,4 +94,18 @@ public sealed class MountSettings
     /// what was measured against a real server; leaving this out takes them.
     /// </remarks>
     public ReadSettings Read { get; init; } = new();
+
+    /// <summary>
+    /// Gets how long nothing may have been written under a directory before the times it was
+    /// given are set again, or <see cref="TimeSpan.Zero"/> to leave a directory carrying what
+    /// the copy into it made of its times.
+    /// </summary>
+    /// <remarks>
+    /// Windows sets a directory's times once, before the first file goes into it, and a store
+    /// that works a directory's time out from what is in it undoes that with every file that
+    /// lands. This is how long the mount waits for the copy to stop before it says once more
+    /// what the directory is to carry. See
+    /// <see href="https://github.com/ernolf/WinDAV/issues/119">#119</see>.
+    /// </remarks>
+    public TimeSpan DirectoryQuiet { get; init; } = DefaultDirectoryQuiet;
 }

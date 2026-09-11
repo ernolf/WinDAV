@@ -45,6 +45,7 @@ internal static class Program
         ReadSettings reads;
         TimeSpan attributes;
         DirectorySettings directories;
+        TimeSpan times;
 
         // Before anything is opened, because a recording asked for in a way that cannot be
         // read is a command line to correct, and a command line to correct leaves no file.
@@ -55,6 +56,7 @@ internal static class Program
             reads = ReadSwitches.Read(line);
             attributes = CacheSwitches.Read(line);
             directories = DirectorySwitches.Read(line);
+            times = TimeSwitches.Read(line);
         }
         catch (UsageException usage)
         {
@@ -76,7 +78,7 @@ internal static class Program
 
         try
         {
-            int status = await RunAsync(line, reads, attributes, directories, logging, cancellation.Token).ConfigureAwait(false);
+            int status = await RunAsync(line, reads, attributes, directories, times, logging, cancellation.Token).ConfigureAwait(false);
 
             // The command line itself is in the header of the file. What is worth a record of
             // its own is what came of it, because a command that answered nothing and one that
@@ -147,6 +149,7 @@ internal static class Program
         ReadSettings reads,
         TimeSpan attributes,
         DirectorySettings directories,
+        TimeSpan times,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
@@ -171,7 +174,7 @@ internal static class Program
 
         if (string.Equals(line.Verb, "mount", StringComparison.Ordinal))
         {
-            return await MountCommand.RunAsync(line, reads, attributes, directories, logging, cancellationToken).ConfigureAwait(false);
+            return await MountCommand.RunAsync(line, reads, attributes, directories, times, logging, cancellationToken).ConfigureAwait(false);
         }
 
         throw new UsageException($"There is no command named '{line.Verb}'. There is account, mount and help.");
@@ -255,6 +258,9 @@ internal static class Program
               --listings <count>   How many directory listings are held at once: 512, or off.
               --probes <count>     How many directories a name must be missing from before a
                                    question about it stops buying a listing: 1, or off.
+              --directory-times <time>
+                                   How long a directory has to have been left alone before the
+                                   times it was given are set again: 5s, or off.
 
             Logging:
               A record is written to %LOCALAPPDATA%\{ProductInfo.Slug}\logs whatever happens,
@@ -321,6 +327,18 @@ internal static class Program
               when it is opened and at no other time.
               These four can be set in the environment instead, as {Switches.Variable(DirectorySwitches.DepthOption)},
               {Switches.Variable(DirectorySwitches.RequestsOption)}, {Switches.Variable(DirectorySwitches.DirectoriesOption)} and {Switches.Variable(DirectorySwitches.ProbesOption)}.
+
+            Directory times:
+              Windows sets a directory's times when it makes it, before the first file goes
+              into it, and it says so once. A server that works a directory's date out from
+              what is in it then replaces that with the date of the file that landed last, so
+              a folder that was copied over ends up dated today.
+              --directory-times is how long nothing may have been written under a directory
+              before the mount says once more what it is to carry. One request per directory,
+              made behind everything anybody is waiting for, and never one behind a file. A
+              mount coming down sends what is still waiting rather than dropping it.
+              --directory-times off leaves a directory carrying what the copy made of its date.
+              It can be set in the environment instead, as {Switches.Variable(TimeSwitches.QuietOption)}.
 
             Accounts:
               'account add' writes the account down and keeps its password apart from it,

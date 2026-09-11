@@ -897,6 +897,80 @@ public sealed class WinDavFileSystemTests
     }
 
     [Fact]
+    public void ADirectoryIsDatedAgainOnceTheCopyIntoItHasStopped()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store, directoryQuiet: TimeSpan.FromMinutes(5));
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            Create(fileSystem, "\\music", out object? directory, out _));
+
+        Assert.NotNull(directory);
+
+        // Windows dates a directory the moment it has made it, and says so once.
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.SetBasicInfo(null, directory, 0, FileTime(s_created), 0, FileTime(s_modified), 0, out _));
+
+        fileSystem.Cleanup(null, directory, "\\music", 0);
+        fileSystem.Close(null, directory);
+
+        // Then the copy goes through it, and a store that works a directory's date out from
+        // what is in it has replaced the date with the time of the file.
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, "\\music\\track.mp3", out object? file, out _));
+
+        Assert.NotNull(file);
+
+        WriteAt(fileSystem, file, 0, "hello");
+
+        fileSystem.Cleanup(null, file, "\\music\\track.mp3", 0);
+        fileSystem.Close(null, file);
+
+        Assert.Single(store.TimesSet);
+
+        // The quiet period is longer than the test, so this is what stands in for it.
+        fileSystem.Unmounted(null!);
+
+        Assert.Equal(2, store.TimesSet.Count);
+        Assert.Equal("/music", store.TimesSet[1].Path);
+        Assert.Equal(new EntryTimes(s_created, s_modified), store.TimesSet[1].Times);
+    }
+
+    [Fact]
+    public void AFileIsNotDatedASecondTime()
+    {
+        FakeStore store = new();
+
+        WinDavFileSystem fileSystem = Mount(store, directoryQuiet: TimeSpan.FromMinutes(5));
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, "\\new.txt", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        WriteAt(fileSystem, fileDesc, 0, "hello");
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.SetBasicInfo(null, fileDesc, 0, FileTime(s_created), 0, FileTime(s_modified), 0, out _));
+
+        fileSystem.Cleanup(null, fileDesc, "\\new.txt", 0);
+        fileSystem.Close(null, fileDesc);
+
+        fileSystem.Unmounted(null!);
+
+        // What a file was given travels with the upload and nothing afterwards undoes it, so
+        // there is nothing to remember and nothing to send again.
+        Assert.Equal(new EntryTimes(s_created, s_modified), Assert.Single(store.Writes).Times);
+        Assert.Empty(store.TimesSet);
+    }
+
+    [Fact]
     public void AFileThatIsBeingDeletedIsNotUploadedFirst()
     {
         FakeStore store = new();
@@ -1150,11 +1224,21 @@ public sealed class WinDavFileSystemTests
     // A date as Windows hands it over, which is what a file time is.
     private static ulong FileTime(DateTimeOffset time) => (ulong)time.UtcDateTime.ToFileTimeUtc();
 
-    private static WinDavFileSystem Mount(FakeStore store, string remotePath = "/")
+    // Without a quiet period unless a test asks for one: what a directory was given is then
+    // set once and stays out of the way of every test that is about something else.
+    private static WinDavFileSystem Mount(
+        FakeStore store,
+        string remotePath = "/",
+        TimeSpan? directoryQuiet = null)
     {
         return new WinDavFileSystem(
             store,
-            new MountSettings { RemotePath = remotePath, VolumeLabel = "Test" });
+            new MountSettings
+            {
+                RemotePath = remotePath,
+                VolumeLabel = "Test",
+                DirectoryQuiet = directoryQuiet ?? TimeSpan.Zero,
+            });
     }
 
     private static int Create(

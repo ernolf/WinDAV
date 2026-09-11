@@ -85,6 +85,10 @@ public sealed class WinDavFileSystem : FileSystemBase
 
     // The names made here and not sent yet. See decision 86 and HeldNames.
     private readonly HeldNames _held = new();
+
+    // The times the directories of a copy were given, to go again once the copy through
+    // them has stopped. Null where the mount is to leave them as the copy left them.
+    private readonly DirectoryTimes? _times;
     private readonly byte[] _security;
     private readonly ulong _mountTime = (ulong)DateTime.UtcNow.ToFileTimeUtc();
 
@@ -126,6 +130,7 @@ public sealed class WinDavFileSystem : FileSystemBase
         _settings = settings;
         _log = loggerFactory?.CreateLogger(typeof(WinDavFileSystem)) ?? NullLogger.Instance;
         _reads = new ReadLayer(provider, settings.Read, _log, recovery: null, gate);
+        _times = DirectoryTimes.Over(provider, settings.DirectoryQuiet, _log);
         _root = NormaliseRoot(settings.RemotePath);
 
         RawSecurityDescriptor descriptor = new(RootSddl);
@@ -195,7 +200,14 @@ public sealed class WinDavFileSystem : FileSystemBase
     }
 
     /// <inheritdoc/>
-    public override void Unmounted(object host) => _mounted = false;
+    public override void Unmounted(object host)
+    {
+        _mounted = false;
+
+        // What a copy that has only just ended left waiting goes now, while the store can
+        // still be reached: there will be no quiet period after this.
+        _times?.Stop();
+    }
 
     /// <inheritdoc/>
     public override int GetVolumeInfo(out VolumeInfo volumeInfo)
@@ -323,6 +335,10 @@ public sealed class WinDavFileSystem : FileSystemBase
             if (directory)
             {
                 Await(_provider.CreateDirectoryAsync(path));
+
+                // A directory made is a change to the one it was made in, the same as a file
+                // written into it.
+                _times?.Wrote(path);
 
                 // What the store answers to the making of a directory says nothing about it,
                 // and the handle being opened has to carry an entry. Asked for rather than
@@ -724,6 +740,8 @@ public sealed class WinDavFileSystem : FileSystemBase
         {
             Await(_provider.DeleteAsync(open.Path));
 
+            _times?.Gone(open.Path);
+
             if (_log.IsEnabled(LogLevel.Debug))
             {
                 _log.LogDebug("Deleted {Path} in {Elapsed} ms.", open.Path, Elapsed(started));
@@ -798,6 +816,12 @@ public sealed class WinDavFileSystem : FileSystemBase
             }
 
             Await(_provider.MoveAsync(source, destination, replaceIfExists));
+
+            // The name that was there is not there any more, and both directories have
+            // changed. What was kept for the name is not carried over: the times of a
+            // directory somebody moved are the store's own business.
+            _times?.Gone(source);
+            _times?.Wrote(destination);
 
             if (_log.IsEnabled(LogLevel.Debug))
             {
@@ -1084,6 +1108,14 @@ public sealed class WinDavFileSystem : FileSystemBase
             if (open.Stage is not WriteStage { Pending: true })
             {
                 SetTimes(open);
+            }
+
+            // A directory only. What a file is given travels with the file and nothing
+            // touches it afterwards, while what a directory is given is undone by the copy
+            // that follows it, which is why it is kept and sent again. #119.
+            if (open.Entry.IsDirectory)
+            {
+                _times?.Given(open.Path, open.Times);
             }
         }
 
@@ -1391,8 +1423,20 @@ public sealed class WinDavFileSystem : FileSystemBase
         // MustBeNew where the store has not been given this name at all. It is the upload
         // that makes it, and the store is asked to refuse rather than overwrite, so that
         // somebody who got there first is a collision and not a lost file.
-        stage.Delivered(
-            Await(_provider.WriteAsync(open.Path, stage.Rewound(), stage.ETag, open.Times, stage.MustBeNew)));
+        // And the directory it lands in is one the store may date by it, from the moment it
+        // arrives there. A file of any size takes longer to send than a quiet period is, so
+        // the directory waits for the whole of the upload and not only for what follows it.
+        _times?.Writing(open.Path);
+
+        try
+        {
+            stage.Delivered(
+                Await(_provider.WriteAsync(open.Path, stage.Rewound(), stage.ETag, open.Times, stage.MustBeNew)));
+        }
+        finally
+        {
+            _times?.Wrote(open.Path);
+        }
 
         // The store has the name now, so what was answered from this side is answered from
         // the store again.
