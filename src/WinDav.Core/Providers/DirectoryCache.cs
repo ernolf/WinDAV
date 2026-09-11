@@ -503,11 +503,20 @@ public sealed class DirectoryCache : IStorageProvider
         {
             await _inner.DeleteAsync(path, cancellationToken).ConfigureAwait(false);
         }
-        finally
+        catch
         {
+            // Nothing is known about what is there now, not even whether the request reached
+            // the store at all, so the listing goes.
             ForgetTree(path);
             ForgetParent(path);
+
+            throw;
         }
+
+        // What was held below the name goes with the name. The listing the name stood in
+        // stays and loses the one entry.
+        ForgetTree(path);
+        Removed(path);
     }
 
     /// <inheritdoc/>
@@ -1031,6 +1040,46 @@ public sealed class DirectoryCache : IStorageProvider
             else
             {
                 entries[at] = written;
+            }
+
+            _listings[parent] = new Held(entries, null, held.Stamp);
+        }
+    }
+
+    // A delete leaves one entry of a directory gone and every other one as it was, so that
+    // one is taken out rather than the whole listing thrown away. It is what Wrote does with
+    // less to carry over: the name is gone, and nothing that stood beside it is touched.
+    // Emptying a directory is what pays for the difference, because every delete would
+    // otherwise throw away what the delete before it read.
+    //
+    // A listing that no longer holds the name is also the answer to every question about a
+    // name below it, and that is the second thing this ends: a directory deleted out from
+    // under a program that is still working through its own list of what to delete.
+    //
+    // Self goes, as it does after a write and for the same reason: a delete changes the
+    // directory as well, and nothing in the answer says what to. The stamp stays as it was.
+    private void Removed(string path)
+    {
+        if (ParentOf(path) is not string parent)
+        {
+            return;
+        }
+
+        lock (_sync)
+        {
+            if (!_listings.TryGetValue(parent, out Held held))
+            {
+                return;
+            }
+
+            List<RemoteEntry> entries = [];
+
+            foreach (RemoteEntry entry in held.Entries)
+            {
+                if (!string.Equals(entry.Path, path, StringComparison.Ordinal))
+                {
+                    entries.Add(entry);
+                }
             }
 
             _listings[parent] = new Held(entries, null, held.Stamp);

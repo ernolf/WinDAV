@@ -1758,13 +1758,142 @@ public sealed class DirectoryCacheTests
 
         await cache.DeleteAsync("/music/live", TestContext.Current.CancellationToken);
 
-        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+        DirectoryListing after = await cache.ListAsync("/music", TestContext.Current.CancellationToken);
 
-        Assert.Equal<string>(["/music", "/music/live", "/music"], store.Listed);
+        Assert.Empty(after.Entries);
+        Assert.Equal<string>(["/music", "/music/live"], store.Listed);
 
         // And what was inside it is gone with it rather than answered from memory.
         await Assert.ThrowsAsync<ProviderException>(
             () => cache.ListAsync("/music/live", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task ADeleteLeavesTheListingStandingWithoutTheNameItTookOut()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/a.txt");
+        store.AddFile("/music/b.txt");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await cache.DeleteAsync("/music/a.txt", TestContext.Current.CancellationToken);
+
+        // The name is gone and nothing that stood beside it was touched, so the listing is
+        // still the answer and is not asked for again.
+        DirectoryListing after = await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        Assert.Equal<string>(["/music/b.txt"], after.Entries.Select(held => held.Path));
+        Assert.Equal<string>(["/music"], store.Listed);
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.GetAsync("/music/a.txt", TestContext.Current.CancellationToken));
+
+        Assert.Empty(store.Asked);
+    }
+
+    [Fact]
+    public async Task WhatADeleteDidToTheDirectoryItselfIsNotClaimed()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/a.txt");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        Assert.NotNull((await cache.ListAsync("/music", TestContext.Current.CancellationToken)).Self);
+
+        await cache.DeleteAsync("/music/a.txt", TestContext.Current.CancellationToken);
+
+        // A delete changes the directory as well, and the delete says nothing about what to.
+        DirectoryListing after = await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        Assert.Null(after.Self);
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ANameUnderADirectoryThisDeletedIsAnsweredWithoutAsking()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddDirectory("/music/live", "v2");
+        store.AddFile("/music/live/one.mp3");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await cache.DeleteAsync("/music/live", TestContext.Current.CancellationToken);
+
+        // What a program still working through its own list of what to delete asks for, one
+        // name after another. The listing the directory stood in no longer holds it, and that
+        // is the answer for everything below it as well.
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            await Assert.ThrowsAsync<ProviderException>(
+                () => cache.GetAsync("/music/live/one.mp3", TestContext.Current.CancellationToken));
+        }
+
+        Assert.Empty(store.Asked);
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task EmptyingADirectoryListsItOnce()
+    {
+        TreeStore store = new();
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/a.txt");
+        store.AddFile("/music/b.txt");
+        store.AddFile("/music/c.txt");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        string[] names = ["/music/a.txt", "/music/b.txt", "/music/c.txt"];
+
+        foreach (string name in names)
+        {
+            await cache.DeleteAsync(name, TestContext.Current.CancellationToken);
+        }
+
+        // What this is for: every delete would otherwise throw away what the delete before it
+        // read, and the directory would be listed again between each two of them.
+        DirectoryListing after = await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        Assert.Empty(after.Entries);
+        Assert.Equal<string>(["/music"], store.Listed);
+    }
+
+    [Fact]
+    public async Task ADeleteThatDidNotGoThroughTakesTheListingAway()
+    {
+        TreeStore store = new() { RefuseDeletes = true };
+
+        store.AddDirectory("/music", "v1");
+        store.AddFile("/music/a.txt");
+
+        DirectoryCache cache = Cache(store, Off);
+
+        await cache.ListAsync("/music", TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<ProviderException>(
+            () => cache.DeleteAsync("/music/a.txt", TestContext.Current.CancellationToken));
+
+        // Whether the request reached the store at all is not known, so nothing of what was
+        // held is worth keeping.
+        await cache.GetAsync("/music/a.txt", TestContext.Current.CancellationToken);
+
+        Assert.Equal<string>(["/music", "/music"], store.Listed);
     }
 
     [Fact]
@@ -2026,6 +2155,9 @@ public sealed class DirectoryCacheTests
         // A store that will not take the write at all.
         public bool RefuseWrites { get; init; }
 
+        // A store that will not take the delete at all.
+        public bool RefuseDeletes { get; init; }
+
         public int SpaceAsked { get; private set; }
 
         public void AddDirectory(string path, string? version, DateTimeOffset? modified = null)
@@ -2169,6 +2301,11 @@ public sealed class DirectoryCacheTests
 
         public Task DeleteAsync(string path, CancellationToken cancellationToken = default)
         {
+            if (RefuseDeletes)
+            {
+                throw new ProviderException(ProviderError.Busy, "Try again later.");
+            }
+
             string below = path + '/';
 
             _directories.Remove(path);
