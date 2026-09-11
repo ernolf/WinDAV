@@ -48,6 +48,10 @@ internal static class MountCommand
     /// <param name="reads">How much the mount may fetch at a time, and how much at once.</param>
     /// <param name="attributes">How long the mount may believe what it was told about an entry.</param>
     /// <param name="directories">How far ahead the mount may list, and how much of it it may hold.</param>
+    /// <param name="times">
+    /// How long a directory has to have been written into for the last time before the times
+    /// it was given are set again.
+    /// </param>
     /// <param name="logging">Where a mount going up and coming down is written down.</param>
     /// <param name="cancellationToken">Ends the mount.</param>
     /// <returns>The exit code.</returns>
@@ -56,6 +60,7 @@ internal static class MountCommand
         ReadSettings reads,
         TimeSpan attributes,
         DirectorySettings directories,
+        TimeSpan times,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
@@ -71,7 +76,7 @@ internal static class MountCommand
             Add => await AddAsync(line, logging, cancellationToken).ConfigureAwait(false),
             List => await ListAsync(line, cancellationToken).ConfigureAwait(false),
             Remove => await RemoveAsync(line, cancellationToken).ConfigureAwait(false),
-            _ => await MountAsync(line, reads, attributes, directories, logging, cancellationToken).ConfigureAwait(false),
+            _ => await MountAsync(line, reads, attributes, directories, times, logging, cancellationToken).ConfigureAwait(false),
         };
     }
 
@@ -80,6 +85,7 @@ internal static class MountCommand
         ReadSettings reads,
         TimeSpan attributes,
         DirectorySettings directories,
+        TimeSpan times,
         ILoggerFactory logging,
         CancellationToken cancellationToken)
     {
@@ -184,6 +190,7 @@ internal static class MountCommand
                     ExplorerName = label,
                     IconPath = request.IconPath,
                     Read = reads,
+                    DirectoryQuiet = times,
                 },
                 logging,
                 gate);
