@@ -102,7 +102,9 @@ internal sealed class LoggingHandler : DelegatingHandler
         }
     }
 
-    private static string Describe(HttpRequestMessage request) =>
+    // The line a request is written under, shared with the handler above this one so that
+    // the same request reads the same wherever it is mentioned.
+    internal static string Describe(HttpRequestMessage request) =>
         $"{request.Method.Method} {(request.RequestUri is { } address ? LogRedaction.Server(address) : "?")}";
 
     private static string Elapsed(long started) =>
