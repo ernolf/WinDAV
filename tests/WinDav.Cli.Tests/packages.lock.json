@@ -209,6 +209,7 @@
         "dependencies": {
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.11, )",
           "WinDav.Abstractions": "[1.0.0, )",
+          "WinDav.Core": "[1.0.0, )",
           "WinDav.Dav": "[1.0.0, )"
         }
       },

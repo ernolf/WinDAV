@@ -6,12 +6,15 @@ using System.Text;
 using System.Xml.Linq;
 using WinDav.Abstractions;
 using WinDav.Dav;
+using WinDav.Providers.Nextcloud.Ocs;
 using Xunit;
 
 namespace WinDav.Providers.Nextcloud.Tests;
 
 public sealed class NextcloudPropertiesTests
 {
+    private static readonly Uri s_server = new("https://cloud.example.com/");
+
     private static readonly Uri s_base = new("https://cloud.example.com/remote.php/dav/files/ernolf/");
 
     private static readonly Uri s_uploads = new("https://cloud.example.com/remote.php/dav/uploads/ernolf/");
@@ -130,7 +133,7 @@ public sealed class NextcloudPropertiesTests
     }
 
     private static NextcloudProvider Provider(HttpClient httpClient) =>
-        new(new DavClient(httpClient), s_base, s_uploads);
+        new(new DavClient(httpClient), new OcsClient(httpClient, s_server), s_base, s_uploads);
 
     private static async Task<RemoteEntry> EntryAsync(string listing)
     {

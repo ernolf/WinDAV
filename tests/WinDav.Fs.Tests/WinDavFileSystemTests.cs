@@ -1200,6 +1200,144 @@ public sealed class WinDavFileSystemTests
     }
 
     [Fact]
+    public void AFileWrittenInOrderGoesAheadInPiecesAndIsFinishedWithTheRest()
+    {
+        FakeStore store = new() { PieceSize = 4 };
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\big.bin", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        WriteAt(fileSystem, fileDesc, 0, "hello world!");
+
+        // Two pieces and not three: the last one stays behind for the rest.
+        Assert.True(SpinWait.SpinUntil(() => store.PiecesSent == 2, TimeSpan.FromSeconds(10)));
+
+        fileSystem.Cleanup(null, fileDesc, @"\big.bin", 0);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Equal("hello world!", store.ContentOf("/big.bin"));
+        Assert.Equal("/big.bin", Assert.Single(store.Assembled));
+        Assert.Equal(2, store.PiecesSent);
+        Assert.Empty(store.Writes);
+    }
+
+    [Fact]
+    public void BlocksWrittenOutOfOrderGoAheadOnceTheGapBeforeThemIsFilled()
+    {
+        FakeStore store = new() { PieceSize = 4 };
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\big.bin", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        WriteAt(fileSystem, fileDesc, 4, "o wo");
+
+        // Nothing in front of it has been written, so nothing can go yet.
+        Assert.Equal(0, store.PiecesSent);
+
+        WriteAt(fileSystem, fileDesc, 0, "hell");
+        WriteAt(fileSystem, fileDesc, 8, "rld!");
+
+        Assert.True(SpinWait.SpinUntil(() => store.PiecesSent == 2, TimeSpan.FromSeconds(10)));
+
+        fileSystem.Cleanup(null, fileDesc, @"\big.bin", 0);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Equal("hello world!", store.ContentOf("/big.bin"));
+        Assert.Single(store.Assembled);
+        Assert.Empty(store.Writes);
+    }
+
+    [Fact]
+    public void AWriteBackOverWhatWentAheadSendsTheFileWholeAndTakesThePiecesAway()
+    {
+        FakeStore store = new() { PieceSize = 4 };
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\big.bin", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        WriteAt(fileSystem, fileDesc, 0, "hello world!");
+
+        Assert.True(SpinWait.SpinUntil(() => store.PiecesSent == 2, TimeSpan.FromSeconds(10)));
+
+        WriteAt(fileSystem, fileDesc, 0, "J");
+
+        fileSystem.Cleanup(null, fileDesc, @"\big.bin", 0);
+        fileSystem.Close(null, fileDesc);
+
+        // What had gone ahead was the old front, so the file went as it now is, whole.
+        Assert.Equal("Jello world!", store.ContentOf("/big.bin"));
+        Assert.Single(store.Writes);
+        Assert.Empty(store.Assembled);
+        Assert.Equal(1, store.Abandoned);
+    }
+
+    [Fact]
+    public void AStoreThatRefusesAPieceGetsTheFileWhole()
+    {
+        FakeStore store = new() { PieceSize = 4, RefusePieces = true };
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\big.bin", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        WriteAt(fileSystem, fileDesc, 0, "hello world!");
+
+        Assert.True(SpinWait.SpinUntil(() => store.PiecesRefused == 1, TimeSpan.FromSeconds(10)));
+
+        fileSystem.Cleanup(null, fileDesc, @"\big.bin", 0);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Equal("hello world!", store.ContentOf("/big.bin"));
+        Assert.Single(store.Writes);
+        Assert.Empty(store.Assembled);
+    }
+
+    [Fact]
+    public void WhatWentAheadOfAFileThatIsDeletedIsTakenAway()
+    {
+        FakeStore store = new() { PieceSize = 4 };
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\scratch.tmp", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        WriteAt(fileSystem, fileDesc, 0, "hello world!");
+
+        Assert.True(SpinWait.SpinUntil(() => store.PiecesSent == 2, TimeSpan.FromSeconds(10)));
+
+        fileSystem.Cleanup(null, fileDesc, @"\scratch.tmp", FileSystemBase.CleanupDelete);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Equal(1, store.Abandoned);
+        Assert.Empty(store.Writes);
+        Assert.Empty(store.Assembled);
+        Assert.Null(store.At("/scratch.tmp"));
+    }
+
+    [Fact]
     public void FlushingTheWholeVolumeHasNothingToDoAndSaysSo()
     {
         WinDavFileSystem fileSystem = Mount(new FakeStore());

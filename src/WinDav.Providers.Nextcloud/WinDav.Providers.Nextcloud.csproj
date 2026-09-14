@@ -12,8 +12,17 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 
+  <!-- The tests shorten the wait for an unanswered assembly, which is minutes long on a
+       real server. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="WinDav.Providers.Nextcloud.Tests" />
+  </ItemGroup>
+
+  <!-- Core for the windows the chunks of an upload are read through. It is used here by
+       name, so it is asked for rather than taken from WinDav.Dav on the way past. -->
   <ItemGroup>
     <ProjectReference Include="..\WinDav.Abstractions\WinDav.Abstractions.csproj" />
+    <ProjectReference Include="..\WinDav.Core\WinDav.Core.csproj" />
     <ProjectReference Include="..\WinDav.Dav\WinDav.Dav.csproj" />
   </ItemGroup>
 

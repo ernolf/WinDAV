@@ -387,12 +387,16 @@ public sealed class DavClient
     /// <param name="overwrite">Whether an existing destination may be replaced.</param>
     /// <param name="headers">Extra request headers, see <see cref="MkColAsync"/>.</param>
     /// <param name="cancellationToken">Cancels the request.</param>
-    /// <returns>A task that completes when the resource has moved.</returns>
+    /// <returns>
+    /// The entity tag of the resource where it now stands, when the server stated one.
+    /// RFC 4918 does not ask for one on a MOVE, so <see langword="null"/> is an ordinary
+    /// answer and not a failure.
+    /// </returns>
     /// <exception cref="HttpRequestException">
     /// The server refused. <see cref="HttpStatusCode.PreconditionFailed"/> means the
     /// destination exists and <paramref name="overwrite"/> was <see langword="false"/>.
     /// </exception>
-    public Task MoveAsync(
+    public Task<string?> MoveAsync(
         Uri source,
         Uri destination,
         bool overwrite = false,
@@ -431,7 +435,7 @@ public sealed class DavClient
         return SendRelocationAsync(s_copy, source, destination, overwrite, depth, headers: null, cancellationToken);
     }
 
-    private async Task SendRelocationAsync(
+    private async Task<string?> SendRelocationAsync(
         HttpMethod method,
         Uri source,
         Uri destination,
@@ -463,6 +467,8 @@ public sealed class DavClient
 
         using HttpResponseMessage response = await SendExpectingAsync(request, s_relocationAccepts, cancellationToken)
             .ConfigureAwait(false);
+
+        return response.Headers.ETag?.ToString();
     }
 
     private static void AddHeaders(HttpRequestMessage request, IEnumerable<KeyValuePair<string, string>>? headers)

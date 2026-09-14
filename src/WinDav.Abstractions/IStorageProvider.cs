@@ -118,6 +118,20 @@ public interface IStorageProvider
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Begins an upload whose front can go to the store before the rest of the file exists.
+    /// </summary>
+    /// <param name="path">The file to write.</param>
+    /// <returns>
+    /// The upload, or <see langword="null"/> when the store takes a file only whole and
+    /// <see cref="WriteAsync"/> is the way in.
+    /// </returns>
+    /// <remarks>
+    /// Asking sends nothing. Nothing goes out before the upload is asked how long a piece is,
+    /// or is sent one.
+    /// </remarks>
+    IUpload? BeginUpload(string path);
+
+    /// <summary>
     /// Sets the times an entry carries, without touching what is in it.
     /// </summary>
     /// <param name="path">The entry, a file or a directory.</param>

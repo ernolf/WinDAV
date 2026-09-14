@@ -13,6 +13,7 @@ namespace WinDav.Providers.Nextcloud;
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(OcsResponse))]
 [JsonSerializable(typeof(OcsUser))]
+[JsonSerializable(typeof(OcsCapabilities))]
 [JsonSerializable(typeof(LoginFlowStart))]
 [JsonSerializable(typeof(LoginFlowCredentials))]
 internal sealed partial class NextcloudJson : JsonSerializerContext

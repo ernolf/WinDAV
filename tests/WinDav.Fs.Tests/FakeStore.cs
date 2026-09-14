@@ -17,6 +17,12 @@ internal sealed class FakeStore : IStorageProvider
 
     private int _version;
 
+    private int _piecesSent;
+
+    private int _piecesRefused;
+
+    private int _abandoned;
+
     public FakeStore()
     {
         AddDirectory("/");
@@ -49,6 +55,25 @@ internal sealed class FakeStore : IStorageProvider
     // What the store says about its room. Nothing by default, which is a store that keeps no
     // such figure.
     public StorageSpace Space { get; set; } = StorageSpace.Unknown;
+
+    // Set to take a file in pieces of this size, the way a store that chunks does. Nothing by
+    // default, which is a store that takes a file only whole.
+    public int? PieceSize { get; set; }
+
+    // Set to refuse every piece, the way a store that has run out of room does.
+    public bool RefusePieces { get; set; }
+
+    // The pieces taken and refused, and the uploads let go unfinished. Counted on the thread
+    // that sends ahead, so read with a barrier.
+    public int PiecesSent => Volatile.Read(ref _piecesSent);
+
+    public int PiecesRefused => Volatile.Read(ref _piecesRefused);
+
+    public int Abandoned => Volatile.Read(ref _abandoned);
+
+    // Where a file was put together out of pieces, in order. One entry is one upload that did
+    // not go whole.
+    public List<string> Assembled { get; } = [];
 
     public void AddDirectory(string path) => _entries[path] = new RemoteEntry(path, true);
 
@@ -188,16 +213,7 @@ internal sealed class FakeStore : IStorageProvider
         CancellationToken cancellationToken)
     {
         Fail();
-
-        if (ifMatch is not null && !string.Equals(_entries.GetValueOrDefault(path)?.ETag, ifMatch, StringComparison.Ordinal))
-        {
-            throw new ProviderException(ProviderError.PreconditionFailed);
-        }
-
-        if (mustBeNew && _entries.ContainsKey(path))
-        {
-            throw new ProviderException(ProviderError.AlreadyExists);
-        }
+        Guard(path, ifMatch, mustBeNew);
 
         using MemoryStream taken = new();
 
@@ -211,6 +227,8 @@ internal sealed class FakeStore : IStorageProvider
         // request, and the entity tag it answers with is still good afterwards.
         return Store(path, bytes, times);
     }
+
+    public IUpload? BeginUpload(string path) => PieceSize is int size ? new FakeUpload(this, path, size) : null;
 
     public Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken)
     {
@@ -374,6 +392,21 @@ internal sealed class FakeStore : IStorageProvider
         return eTag;
     }
 
+    // What a store checks before it writes: the version the write was made conditional on,
+    // and whether the name has to be free.
+    private void Guard(string path, string? ifMatch, bool mustBeNew)
+    {
+        if (ifMatch is not null && !string.Equals(_entries.GetValueOrDefault(path)?.ETag, ifMatch, StringComparison.Ordinal))
+        {
+            throw new ProviderException(ProviderError.PreconditionFailed);
+        }
+
+        if (mustBeNew && _entries.ContainsKey(path))
+        {
+            throw new ProviderException(ProviderError.AlreadyExists);
+        }
+    }
+
     private RemoteEntry Find(string path)
     {
         if (_entries.TryGetValue(path, out RemoteEntry? entry))
@@ -389,6 +422,81 @@ internal sealed class FakeStore : IStorageProvider
         if (FailWith is ProviderError error)
         {
             throw new ProviderException(error);
+        }
+    }
+
+    private void CountSent() => Interlocked.Increment(ref _piecesSent);
+
+    private void CountRefused() => Interlocked.Increment(ref _piecesRefused);
+
+    private void CountAbandoned() => Interlocked.Increment(ref _abandoned);
+
+    // An upload in pieces that keeps them until the finish puts the file together, which is
+    // when the entry changes and not before.
+    private sealed class FakeUpload(FakeStore store, string path, int pieceSize) : IUpload
+    {
+        private readonly List<byte> _bytes = [];
+
+        private bool _finished;
+
+        public Task<long> GetPieceSizeAsync(CancellationToken cancellationToken) => Task.FromResult<long>(pieceSize);
+
+        // The piece is the upload's once handed over, taken or refused.
+        public async Task<bool> SendAsync(Stream piece, CancellationToken cancellationToken)
+        {
+            try
+            {
+                if (store.RefusePieces)
+                {
+                    store.CountRefused();
+
+                    throw new ProviderException(ProviderError.InsufficientStorage);
+                }
+
+                byte[] bytes = new byte[piece.Length - piece.Position];
+                piece.ReadExactly(bytes);
+                _bytes.AddRange(bytes);
+                store.CountSent();
+
+                return true;
+            }
+            finally
+            {
+                await piece.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        public async Task<string?> FinishAsync(
+            Stream rest,
+            string? ifMatch,
+            EntryTimes times,
+            bool mustBeNew,
+            CancellationToken cancellationToken)
+        {
+            _finished = true;
+
+            store.Fail();
+            store.Guard(path, ifMatch, mustBeNew);
+
+            using MemoryStream taken = new();
+
+            await rest.CopyToAsync(taken, cancellationToken).ConfigureAwait(false);
+
+            byte[] bytes = [.. _bytes, .. taken.ToArray()];
+
+            store.Assembled.Add(path);
+
+            return store.Store(path, bytes, times);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            if (!_finished)
+            {
+                store.CountAbandoned();
+            }
+
+            return ValueTask.CompletedTask;
         }
     }
 }

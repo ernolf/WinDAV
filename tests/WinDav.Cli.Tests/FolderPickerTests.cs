@@ -220,6 +220,8 @@ public sealed class FolderPickerTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public IUpload? BeginUpload(string path) => null;
+
         public Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 

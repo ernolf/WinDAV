@@ -402,44 +402,20 @@ public sealed class DirectoryCache : IStorageProvider
         // Read before the write rather than after it: the store leaves the stream where it
         // stopped reading, and what went up is what stood in front of it when it started.
         long? sent = content is { CanSeek: true } ? content.Length - content.Position : null;
-        string? eTag;
 
-        try
-        {
-            eTag = await _inner.WriteAsync(path, content, ifMatch, times, mustBeNew, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch
-        {
-            // Nothing is known about what is there now, not even whether the write reached
-            // the store at all, so the listing goes.
-            ForgetParent(path);
-            Appeared(path);
+        return await WriteThroughAsync(
+            path,
+            sent,
+            times,
+            () => _inner.WriteAsync(path, content, ifMatch, times, mustBeNew, cancellationToken)).ConfigureAwait(false);
+    }
 
-            throw;
-        }
+    /// <inheritdoc/>
+    public IUpload? BeginUpload(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
 
-        // What a write changed the entry to is in our hand: the length is what went up, the
-        // tag is what came back, and the times are what was asked for. Where all three are
-        // known the entry is put into the listing in place of the old one and the rest of
-        // the listing stands. That is what a directory being filled is otherwise listed
-        // again for, once per file, over everything already in it.
-        if (sent is long length && times.LastModified is not null)
-        {
-            Wrote(path, length, eTag, times);
-        }
-        else
-        {
-            // A stream that will not say how long it is, or a caller that named no time,
-            // leaves a hole that could only be filled with a guess. A listing with a guess
-            // in it is worse than no listing.
-            ForgetParent(path);
-        }
-
-        // A file that was not there before is in the directory now.
-        Appeared(path);
-
-        return eTag;
+        return _inner.BeginUpload(path) is IUpload upload ? new Upload(this, path, upload) : null;
     }
 
     /// <inheritdoc/>
@@ -984,6 +960,49 @@ public sealed class DirectoryCache : IStorageProvider
         return keys;
     }
 
+    // What the listing learns from a write, which is the same whether the file went up whole
+    // or in pieces.
+    private async Task<string?> WriteThroughAsync(string path, long? sent, EntryTimes times, Func<Task<string?>> write)
+    {
+        string? eTag;
+
+        try
+        {
+            eTag = await write().ConfigureAwait(false);
+        }
+        catch
+        {
+            // Nothing is known about what is there now, not even whether the write reached
+            // the store at all, so the listing goes.
+            ForgetParent(path);
+            Appeared(path);
+
+            throw;
+        }
+
+        // What a write changed the entry to is in our hand: the length is what went up, the
+        // tag is what came back, and the times are what was asked for. Where all three are
+        // known the entry is put into the listing in place of the old one and the rest of
+        // the listing stands. That is what a directory being filled is otherwise listed
+        // again for, once per file, over everything already in it.
+        if (sent is long length && times.LastModified is not null)
+        {
+            Wrote(path, length, eTag, times);
+        }
+        else
+        {
+            // A stream that will not say how long it is, or a caller that named no time,
+            // leaves a hole that could only be filled with a guess. A listing with a guess
+            // in it is worse than no listing.
+            ForgetParent(path);
+        }
+
+        // A file that was not there before is in the directory now.
+        Appeared(path);
+
+        return eTag;
+    }
+
     // A write leaves one entry of a directory changed and every other one as it was, so that
     // one is put in place of the old rather than the whole listing thrown away. What a write
     // does not touch is carried over from what stood there: the name the store knows the
@@ -1415,6 +1434,50 @@ public sealed class DirectoryCache : IStorageProvider
         {
             _queue.Clear();
         }
+    }
+
+    // An upload through this cache. What the listing learns from it is what it learns from a
+    // write; the pieces are counted as they go, because the rest is all the finish is handed.
+    private sealed class Upload(DirectoryCache cache, string path, IUpload inner) : IUpload
+    {
+        private long _sent;
+
+        public Task<long> GetPieceSizeAsync(CancellationToken cancellationToken) =>
+            inner.GetPieceSizeAsync(cancellationToken);
+
+        public async Task<bool> SendAsync(Stream piece, CancellationToken cancellationToken)
+        {
+            // Measured before it is handed on: from then on it is read while it travels.
+            long length = piece is { CanSeek: true } ? piece.Length - piece.Position : 0;
+
+            bool taken = await inner.SendAsync(piece, cancellationToken).ConfigureAwait(false);
+
+            if (taken)
+            {
+                _sent += length;
+            }
+
+            return taken;
+        }
+
+        public Task<string?> FinishAsync(
+            Stream rest,
+            string? ifMatch,
+            EntryTimes times,
+            bool mustBeNew,
+            CancellationToken cancellationToken)
+        {
+            // Read before the finish, for the reason WriteAsync gives.
+            long? sent = rest is { CanSeek: true } ? _sent + rest.Length - rest.Position : null;
+
+            return cache.WriteThroughAsync(
+                path,
+                sent,
+                times,
+                () => inner.FinishAsync(rest, ifMatch, times, mustBeNew, cancellationToken));
+        }
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
     // What is held of one directory: what was in it, what the store said about it, and when

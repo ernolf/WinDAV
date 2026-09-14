@@ -293,9 +293,9 @@ public sealed class DavProviderFactoryTests
             return Handler;
         }
 
-        protected override IStorageProvider CreateProvider(DavClient client, ProviderSettings settings)
+        protected override IStorageProvider CreateProvider(HttpClient httpClient, ProviderSettings settings)
         {
-            Client = client;
+            Client = new DavClient(httpClient);
             Settings = settings;
 
             if (Fail)
@@ -422,6 +422,8 @@ public sealed class DavProviderFactoryTests
             bool mustBeNew,
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public IUpload? BeginUpload(string path) => null;
 
         public Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
