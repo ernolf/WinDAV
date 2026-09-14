@@ -384,6 +384,21 @@ public sealed class DavClientTests
         Assert.Null(handler.Depth);
     }
 
+    [Fact]
+    public async Task MoveAsyncReturnsTheETagTheServerAnsweredWith()
+    {
+        HttpResponseMessage response = new(HttpStatusCode.Created);
+        response.Headers.ETag = new EntityTagHeaderValue("\"6a9f\"");
+
+        RecordingHandler handler = new(response);
+        using HttpClient httpClient = new(handler);
+
+        string? etag = await new DavClient(httpClient)
+            .MoveAsync(s_file, s_otherFile, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("\"6a9f\"", etag);
+    }
+
     [Theory]
     [InlineData(DavDepth.Infinity, "infinity")]
     [InlineData(DavDepth.Zero, "0")]

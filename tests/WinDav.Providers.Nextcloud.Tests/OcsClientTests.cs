@@ -18,6 +18,12 @@ public sealed class OcsClientTests
         {"ocs":{"meta":{"status":"ok","statuscode":200,"message":"OK"},"data":{"id":"ernolf","display-name":"Raphael"}}}
         """;
 
+    // Cut down from what a server with the limits at their defaults answers. The rest of it is
+    // skipped the same way.
+    private const string Capabilities = """
+        {"ocs":{"meta":{"status":"ok","statuscode":200,"message":"OK"},"data":{"version":{"major":31},"capabilities":{"core":{"pollinterval":60},"files":{"bigfilechunking":true,"chunked_upload":{"max_size":104857600,"max_parallel_count":5}}}}}}
+        """;
+
     [Fact]
     public async Task TheIdentifierIsReadOutOfTheEnvelope()
     {
@@ -148,6 +154,33 @@ public sealed class OcsClientTests
         // if it is told what happened.
         await Assert.ThrowsAsync<HttpRequestException>(
             () => client.DeleteAppPasswordAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task TheLimitsOfAChunkedUploadAreReadOutOfTheCapabilities()
+    {
+        OcsHandler handler = new(HttpStatusCode.OK, Capabilities);
+        using HttpClient httpClient = new(handler);
+        OcsClient client = new(httpClient, s_server);
+
+        OcsChunkedUpload? limits = await client.GetChunkedUploadAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("https://cloud.example.com/ocs/v2.php/cloud/capabilities", handler.Uri?.AbsoluteUri);
+        Assert.Equal(104857600L, limits?.MaxSize);
+        Assert.Equal(5, limits?.MaxParallelCount);
+    }
+
+    // What a server before Nextcloud 31 answers: the files app is there, the section is not.
+    [Fact]
+    public async Task AServerThatStatesNoLimitsAnswersNothing()
+    {
+        OcsHandler handler = new(
+            HttpStatusCode.OK,
+            """{"ocs":{"meta":{"statuscode":200},"data":{"capabilities":{"files":{"bigfilechunking":true}}}}}""");
+        using HttpClient httpClient = new(handler);
+        OcsClient client = new(httpClient, s_server);
+
+        Assert.Null(await client.GetChunkedUploadAsync(TestContext.Current.CancellationToken));
     }
 
     // Answers every request the same way and keeps what was asked, since what an OCS request

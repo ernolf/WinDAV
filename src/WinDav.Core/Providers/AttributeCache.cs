@@ -185,6 +185,10 @@ public sealed class AttributeCache : IStorageProvider
     }
 
     /// <inheritdoc/>
+    public IUpload? BeginUpload(string path) =>
+        _inner.BeginUpload(path) is IUpload upload ? new Upload(this, path, upload) : null;
+
+    /// <inheritdoc/>
     public async Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken = default)
     {
         try
@@ -352,6 +356,37 @@ public sealed class AttributeCache : IStorageProvider
                 _entries.TryRemove(pair);
             }
         }
+    }
+
+    // An upload through this cache, which forgets the entry once the file has gone, as a
+    // write does.
+    private sealed class Upload(AttributeCache cache, string path, IUpload inner) : IUpload
+    {
+        public Task<long> GetPieceSizeAsync(CancellationToken cancellationToken) =>
+            inner.GetPieceSizeAsync(cancellationToken);
+
+        public Task<bool> SendAsync(Stream piece, CancellationToken cancellationToken) =>
+            inner.SendAsync(piece, cancellationToken);
+
+        public async Task<string?> FinishAsync(
+            Stream rest,
+            string? ifMatch,
+            EntryTimes times,
+            bool mustBeNew,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await inner.FinishAsync(rest, ifMatch, times, mustBeNew, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                // As after a write, and for the same reason.
+                cache.Forget(path);
+            }
+        }
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
     // A struct: what is held is two words, and there is one of them per entry of a listing.

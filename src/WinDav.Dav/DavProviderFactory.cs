@@ -84,7 +84,7 @@ public abstract class DavProviderFactory : IStorageProviderFactory
                     settings.Secret);
             }
 
-            return new DavConnection(httpClient, CreateProvider(new DavClient(httpClient), settings));
+            return new DavConnection(httpClient, CreateProvider(httpClient, settings));
         }
         catch
         {
@@ -96,10 +96,10 @@ public abstract class DavProviderFactory : IStorageProviderFactory
     /// <summary>
     /// Builds the provider the connection hands out.
     /// </summary>
-    /// <param name="client">The client the requests go out on.</param>
+    /// <param name="httpClient">The client the requests go out on. It belongs to the connection.</param>
     /// <param name="settings">Where the store is and how it is reached.</param>
     /// <returns>The provider.</returns>
-    protected abstract IStorageProvider CreateProvider(DavClient client, ProviderSettings settings);
+    protected abstract IStorageProvider CreateProvider(HttpClient httpClient, ProviderSettings settings);
 
     /// <summary>
     /// Builds the handler the requests are sent through.

@@ -448,6 +448,8 @@ public sealed class AttributeCacheTests
             return Task.FromResult<string?>(null);
         }
 
+        public IUpload? BeginUpload(string path) => null;
+
         public Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken = default)
         {
             _paths.Add(path);

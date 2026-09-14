@@ -24,6 +24,12 @@ namespace WinDav.Fs;
 /// <see href="https://github.com/ernolf/WinDAV/wiki/Decisions#66-a-store-that-feels-like-a-sync-client-without-being-one">decision 66</see>
 /// draws.
 /// </para>
+/// <para>
+/// A store that takes a file in pieces is sent the front of it from here while the rest is
+/// still being written, so this also keeps track of how far the file has been written without
+/// a gap and of how much of it has been read out to go ahead. A write that goes back over
+/// what went ahead is noted, and the file then goes whole.
+/// </para>
 /// </remarks>
 internal sealed class WriteStage : IDisposable
 {
@@ -33,7 +39,32 @@ internal sealed class WriteStage : IDisposable
 
     private const string StagedSuffix = ".part";
 
+    // How many runs written beyond the front are followed. A program that writes all over a
+    // file has it sent whole rather than kept track of without end.
+    private const int ScatteredLimit = 256;
+
     private readonly FileStream _file;
+
+    // Pieces are read out of the file while writes go into it, and a FileStream has one
+    // position between them.
+    private readonly Lock _sync = new();
+
+    // Runs written beyond the front, from where each starts to where it ends, until the front
+    // reaches them.
+    private readonly SortedList<long, long> _ahead = [];
+
+    // The front: everything before it has been written, in whatever order it came.
+    private long _written;
+
+    // How far pieces have been read out to go ahead. What lies before it has left.
+    private long _claimed;
+
+    // Set where following the writes is not worth it, or no longer is: nothing is read out
+    // ahead from then on.
+    private bool _whole;
+
+    // Set once a write went back over what had been read out ahead.
+    private bool _disturbed;
 
     /// <summary>
     /// Initialises a new instance of the <see cref="WriteStage"/> class.
@@ -95,7 +126,31 @@ internal sealed class WriteStage : IDisposable
     /// <summary>
     /// Gets how long the file is as it stands here.
     /// </summary>
-    internal long Length => _file.Length;
+    internal long Length
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _file.Length;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a write went back over what had been read out ahead,
+    /// so that what went ahead is not the front of the file any more.
+    /// </summary>
+    internal bool Disturbed
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _disturbed;
+            }
+        }
+    }
 
     /// <summary>
     /// Takes what was handed over at an offset, lengthening the file where it has to.
@@ -109,24 +164,33 @@ internal sealed class WriteStage : IDisposable
 
         try
         {
-            _file.Position = offset;
-
-            for (int written = 0; written < count;)
+            lock (_sync)
             {
-                int piece = Math.Min(TransferBufferSize, count - written);
+                // Before the bytes go in, so that a write that fails half way still counts as
+                // one that went back over what had left.
+                _disturbed |= count > 0 && offset < _claimed;
 
-                Marshal.Copy(buffer + written, chunk, 0, piece);
-                _file.Write(chunk, 0, piece);
+                _file.Position = offset;
 
-                written += piece;
+                for (int written = 0; written < count;)
+                {
+                    int piece = Math.Min(TransferBufferSize, count - written);
+
+                    Marshal.Copy(buffer + written, chunk, 0, piece);
+                    _file.Write(chunk, 0, piece);
+
+                    written += piece;
+                }
+
+                Track(offset, count);
+
+                Pending = true;
             }
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(chunk);
         }
-
-        Pending = true;
     }
 
     /// <summary>
@@ -138,41 +202,44 @@ internal sealed class WriteStage : IDisposable
     /// <returns>How many bytes were put there, which is none at the end of the file.</returns>
     internal int Read(long offset, long count, IntPtr destination)
     {
-        long left = _file.Length - offset;
-
-        if (left <= 0)
+        lock (_sync)
         {
-            return 0;
-        }
+            long left = _file.Length - offset;
 
-        int wanted = (int)Math.Min(count, left);
-        byte[] chunk = ArrayPool<byte>.Shared.Rent(TransferBufferSize);
-
-        try
-        {
-            _file.Position = offset;
-
-            int taken = 0;
-
-            while (taken < wanted)
+            if (left <= 0)
             {
-                int piece = _file.Read(chunk, 0, Math.Min(TransferBufferSize, wanted - taken));
-
-                if (piece == 0)
-                {
-                    break;
-                }
-
-                Marshal.Copy(chunk, 0, destination + taken, piece);
-
-                taken += piece;
+                return 0;
             }
 
-            return taken;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(chunk);
+            int wanted = (int)Math.Min(count, left);
+            byte[] chunk = ArrayPool<byte>.Shared.Rent(TransferBufferSize);
+
+            try
+            {
+                _file.Position = offset;
+
+                int taken = 0;
+
+                while (taken < wanted)
+                {
+                    int piece = _file.Read(chunk, 0, Math.Min(TransferBufferSize, wanted - taken));
+
+                    if (piece == 0)
+                    {
+                        break;
+                    }
+
+                    Marshal.Copy(chunk, 0, destination + taken, piece);
+
+                    taken += piece;
+                }
+
+                return taken;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(chunk);
+            }
         }
     }
 
@@ -182,9 +249,14 @@ internal sealed class WriteStage : IDisposable
     /// <param name="length">What the length becomes.</param>
     internal void Truncate(long length)
     {
-        _file.SetLength(length);
+        lock (_sync)
+        {
+            _file.SetLength(length);
 
-        Pending = true;
+            Cut(length);
+
+            Pending = true;
+        }
     }
 
     /// <summary>
@@ -197,9 +269,15 @@ internal sealed class WriteStage : IDisposable
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        _file.Position = 0;
+        lock (_sync)
+        {
+            _file.Position = 0;
 
-        source.CopyTo(_file);
+            source.CopyTo(_file);
+
+            // What was there before is not a front anybody wrote, so none of it goes ahead.
+            _whole = true;
+        }
     }
 
     /// <summary>
@@ -208,10 +286,94 @@ internal sealed class WriteStage : IDisposable
     /// <returns>The staged file, positioned at its first byte.</returns>
     internal Stream Rewound()
     {
-        _file.Flush();
-        _file.Position = 0;
+        lock (_sync)
+        {
+            _file.Flush();
+            _file.Position = 0;
 
-        return _file;
+            return _file;
+        }
+    }
+
+    /// <summary>
+    /// Tells whether a piece of this size has been written and not read out to go ahead yet.
+    /// </summary>
+    /// <param name="size">How long a piece is.</param>
+    /// <returns><see langword="true"/> when one can be read out.</returns>
+    internal bool CanClaim(long size)
+    {
+        lock (_sync)
+        {
+            return Claimable(size);
+        }
+    }
+
+    /// <summary>
+    /// Hands out the next piece to go ahead, where there is one.
+    /// </summary>
+    /// <param name="size">How long a piece is.</param>
+    /// <returns>The piece, or <see langword="null"/> when there is none to hand out.</returns>
+    /// <remarks>
+    /// Nothing is copied: the piece reads its stretch of the staged file while it travels,
+    /// so a piece on its way costs no memory. It reads under the lock the writes take,
+    /// because the file has one position between them.
+    /// </remarks>
+    internal Stream? Claim(long size)
+    {
+        lock (_sync)
+        {
+            if (!Claimable(size))
+            {
+                return null;
+            }
+
+            WindowStream piece = new(_file, _claimed, size, _sync);
+            _claimed += size;
+
+            return piece;
+        }
+    }
+
+    /// <summary>
+    /// Gives back the last piece that was handed out, which did not go ahead after all.
+    /// </summary>
+    /// <param name="size">How long a piece is.</param>
+    internal void Unclaim(long size)
+    {
+        lock (_sync)
+        {
+            _claimed -= size;
+        }
+    }
+
+    /// <summary>
+    /// Ends reading out ahead for good, and leaves what went ahead as it is.
+    /// </summary>
+    internal void StopClaims()
+    {
+        lock (_sync)
+        {
+            _whole = true;
+            _ahead.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Gives what follows the pieces that went ahead, which is what is left to upload.
+    /// </summary>
+    /// <returns>
+    /// The staged file from the first byte that did not go ahead to its end, as a stream of
+    /// its own. Pieces can still be reading the file when it is handed over, and the file has
+    /// one position between them.
+    /// </returns>
+    internal Stream Rest()
+    {
+        lock (_sync)
+        {
+            _file.Flush();
+
+            return new WindowStream(_file, _claimed, _file.Length - _claimed, _sync);
+        }
     }
 
     /// <summary>
@@ -226,8 +388,87 @@ internal sealed class WriteStage : IDisposable
         ETag = eTag;
         Pending = false;
         MustBeNew = false;
+
+        lock (_sync)
+        {
+            // The front has gone, and is not sent ahead a second time. What is written into
+            // the file from here on goes whole.
+            _whole = true;
+            _ahead.Clear();
+            _claimed = 0;
+            _disturbed = false;
+        }
     }
 
     /// <inheritdoc/>
     public void Dispose() => _file.Dispose();
+
+    // Whether a piece can go ahead: the writes are more than a piece past what has gone, so
+    // the piece is written through and something is still left behind it for the rest.
+    private bool Claimable(long size) => !_disturbed && !_whole && _written - _claimed > size;
+
+    // Moves the front along with a write that reached it, or notes one that landed beyond it.
+    private void Track(long offset, int count)
+    {
+        long end = offset + count;
+
+        if (offset <= _written)
+        {
+            _written = Math.Max(_written, end);
+
+            // Runs written ahead that the front has now reached are part of it.
+            while (_ahead.Count > 0 && _ahead.Keys[0] <= _written)
+            {
+                _written = Math.Max(_written, _ahead.Values[0]);
+                _ahead.RemoveAt(0);
+            }
+
+            return;
+        }
+
+        if (_whole || count == 0)
+        {
+            return;
+        }
+
+        long start = offset;
+
+        // Runs that overlap or touch become one.
+        for (int index = _ahead.Count - 1; index >= 0; index--)
+        {
+            if (_ahead.Keys[index] <= end && _ahead.Values[index] >= start)
+            {
+                start = Math.Min(start, _ahead.Keys[index]);
+                end = Math.Max(end, _ahead.Values[index]);
+                _ahead.RemoveAt(index);
+            }
+        }
+
+        _ahead[start] = end;
+
+        if (_ahead.Count > ScatteredLimit)
+        {
+            _whole = true;
+            _ahead.Clear();
+        }
+    }
+
+    // Keeps what is known about the writes true of a file cut to this length.
+    private void Cut(long length)
+    {
+        _disturbed |= length < _claimed;
+        _written = Math.Min(_written, length);
+
+        for (int index = _ahead.Count - 1; index >= 0; index--)
+        {
+            if (_ahead.Keys[index] >= length)
+            {
+                _ahead.RemoveAt(index);
+            }
+            else if (_ahead.Values[index] > length)
+            {
+                _ahead[_ahead.Keys[index]] = length;
+            }
+        }
+    }
 }

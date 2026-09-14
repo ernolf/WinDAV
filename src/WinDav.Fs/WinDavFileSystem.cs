@@ -721,6 +721,9 @@ public sealed class WinDavFileSystem : FileSystemBase
             return;
         }
 
+        // Whatever went ahead of a file that is being deleted goes with it.
+        Abandon(open);
+
         // Made here and taken away again without ever being sent, which is what a program
         // does with a file it writes and then thinks better of. Nothing is at the store to
         // delete, and asking would be a request for a name it has never heard of.
@@ -778,6 +781,9 @@ public sealed class WinDavFileSystem : FileSystemBase
             {
                 _held.Release(open.Path);
             }
+
+            // Before the stage goes, because the pieces are read out of it.
+            Abandon(open);
 
             open.Stage?.Dispose();
 
@@ -1060,6 +1066,11 @@ public sealed class WinDavFileSystem : FileSystemBase
         }
 
         stage.Write(at, buffer, (int)count);
+
+        // Where the store takes a file in pieces, the front of it can be on its way while the
+        // rest is still coming.
+        open.Early ??= EarlyUpload.Begin(_provider, open.Path, stage);
+        open.Early?.Nudge();
 
         bytesTransferred = (uint)count;
         fileInfo = FileInfoOf(open);
@@ -1430,8 +1441,7 @@ public sealed class WinDavFileSystem : FileSystemBase
 
         try
         {
-            stage.Delivered(
-                Await(_provider.WriteAsync(open.Path, stage.Rewound(), stage.ETag, open.Times, stage.MustBeNew)));
+            stage.Delivered(Upload(open, stage));
         }
         finally
         {
@@ -1449,6 +1459,66 @@ public sealed class WinDavFileSystem : FileSystemBase
                 length,
                 open.Path,
                 Elapsed(started));
+        }
+    }
+
+    // The upload itself. Where the front of the file went ahead while it was being written,
+    // the rest follows it; otherwise, and wherever what went ahead is of no use, the file goes
+    // whole.
+    private string? Upload(OpenEntry open, WriteStage stage)
+    {
+        if (open.Early is EarlyUpload early)
+        {
+            open.Early = null;
+
+            try
+            {
+                Await(early.SealAsync());
+
+                if (early.Usable)
+                {
+                    if (_log.IsEnabled(LogLevel.Debug))
+                    {
+                        _log.LogDebug("Sent {Pieces} pieces of {Path} ahead of the rest.", early.Pieces, open.Path);
+                    }
+
+                    return Await(early.FinishAsync(stage.ETag, open.Times, stage.MustBeNew));
+                }
+
+                if (early.Fault is Exception fault)
+                {
+                    if (_log.IsEnabled(LogLevel.Warning))
+                    {
+                        _log.LogWarning(fault, "Sending {Path} ahead broke off; it goes whole.", open.Path);
+                    }
+                }
+                else if ((early.Pieces > 0 || early.Failure is not null) && _log.IsEnabled(LogLevel.Debug))
+                {
+                    // Refused by the store, or written over after the pieces had left.
+                    _log.LogDebug(
+                        early.Failure,
+                        "Sending {Path} ahead came to nothing after {Pieces} pieces; it goes whole.",
+                        open.Path,
+                        early.Pieces);
+                }
+            }
+            finally
+            {
+                Await(early.DisposeAsync().AsTask());
+            }
+        }
+
+        return Await(_provider.WriteAsync(open.Path, stage.Rewound(), stage.ETag, open.Times, stage.MustBeNew));
+    }
+
+    // Takes away whatever went ahead of a file that is not going to be finished.
+    private static void Abandon(OpenEntry open)
+    {
+        if (open.Early is EarlyUpload early)
+        {
+            open.Early = null;
+
+            Await(early.DisposeAsync().AsTask());
         }
     }
 
@@ -1555,6 +1625,11 @@ public sealed class WinDavFileSystem : FileSystemBase
         // Opened by the first write and let go at Close. While it is here it is what the file
         // is: what has been written into it is read back out of it.
         public WriteStage? Stage { get; set; }
+
+        // The front of the file on its way to the store while the rest is still being
+        // written, where the store takes a file in pieces. Finished or taken away before the
+        // stage goes.
+        public EarlyUpload? Early { get; set; }
 
         // Whether what the store holds under this name is beside the point. Set where the
         // entry was just made and where it was opened to be replaced; it is what says that a

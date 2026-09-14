@@ -37,10 +37,10 @@ public sealed class WebDavProviderFactory : DavProviderFactory
     public override string Name => ProviderName;
 
     /// <inheritdoc/>
-    protected override IStorageProvider CreateProvider(DavClient client, ProviderSettings settings)
+    protected override IStorageProvider CreateProvider(HttpClient httpClient, ProviderSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        return new WebDavProvider(client, DavPath.ToCollectionUri(settings.Server, settings.RemotePath));
+        return new WebDavProvider(new DavClient(httpClient), DavPath.ToCollectionUri(settings.Server, settings.RemotePath));
     }
 }

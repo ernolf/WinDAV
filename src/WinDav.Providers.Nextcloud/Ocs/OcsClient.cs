@@ -4,6 +4,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using WinDav.Dav;
 
 namespace WinDav.Providers.Nextcloud.Ocs;
@@ -35,6 +36,9 @@ public sealed class OcsClient
 
     // The app password the request is sent with, which is the one it deletes.
     private const string AppPasswordPath = "ocs/v2.php/core/apppassword";
+
+    // What the server can do and how its administrator set it up, as far as a client is told.
+    private const string CapabilitiesPath = "ocs/v2.php/cloud/capabilities";
 
     private static readonly MediaTypeWithQualityHeaderValue s_json = new("application/json");
 
@@ -78,36 +82,13 @@ public sealed class OcsClient
     /// <exception cref="FormatException">The answer is no envelope, or holds no identifier.</exception>
     public async Task<string> GetUserIdAsync(CancellationToken cancellationToken = default)
     {
-        using HttpRequestMessage request = new(HttpMethod.Get, new Uri(_server, UserPath));
-
-        using HttpResponseMessage response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
-        using Stream body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-
-        OcsResponse? envelope;
-        OcsUser? user;
-
-        try
-        {
-            envelope = await JsonSerializer
-                .DeserializeAsync(body, NextcloudJson.Default.OcsResponse, cancellationToken)
-                .ConfigureAwait(false);
-
-            // Only an object is a user. A call that failed carries an empty array here.
-            user = envelope?.Ocs is { Data.ValueKind: JsonValueKind.Object } payload
-                ? JsonSerializer.Deserialize(payload.Data, NextcloudJson.Default.OcsUser)
-                : null;
-        }
-        catch (JsonException exception)
-        {
-            throw new FormatException($"{request.RequestUri} did not answer in an OCS envelope.", exception);
-        }
-
-        ThrowIfNotOk(envelope?.Ocs?.Meta, request.RequestUri);
+        Uri uri = new(_server, UserPath);
+        OcsUser? user = await GetDataAsync(uri, NextcloudJson.Default.OcsUser, cancellationToken).ConfigureAwait(false);
 
         string? id = user?.Id;
 
         return string.IsNullOrEmpty(id)
-            ? throw new FormatException($"{request.RequestUri} answered without an identifier for the user.")
+            ? throw new FormatException($"{uri} answered without an identifier for the user.")
             : id;
     }
 
@@ -132,6 +113,27 @@ public sealed class OcsClient
         using HttpResponseMessage response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Asks the server how a file may be sent to it in chunks.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>
+    /// The limits as the administrator set them up, or <see langword="null"/> if the server
+    /// states none. A server before Nextcloud 31 does not.
+    /// </returns>
+    /// <exception cref="HttpRequestException">The server refused or reported a failure.</exception>
+    /// <exception cref="FormatException">The answer is no envelope.</exception>
+    internal async Task<OcsChunkedUpload?> GetChunkedUploadAsync(CancellationToken cancellationToken = default)
+    {
+        OcsCapabilities? capabilities = await GetDataAsync(
+                new Uri(_server, CapabilitiesPath),
+                NextcloudJson.Default.OcsCapabilities,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return capabilities?.Capabilities?.Files?.ChunkedUpload;
+    }
+
     private static void ThrowIfNotOk(OcsStatus? meta, Uri? uri)
     {
         if (meta is null || meta.StatusCode == (int)HttpStatusCode.OK)
@@ -143,6 +145,38 @@ public sealed class OcsClient
             $"{uri} answered {meta.StatusCode} in the envelope: {meta.Message}",
             inner: null,
             statusCode: null);
+    }
+
+    private async Task<T?> GetDataAsync<T>(Uri uri, JsonTypeInfo<T> typeInfo, CancellationToken cancellationToken)
+        where T : class
+    {
+        using HttpRequestMessage request = new(HttpMethod.Get, uri);
+
+        using HttpResponseMessage response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using Stream body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+
+        OcsResponse? envelope;
+        T? data;
+
+        try
+        {
+            envelope = await JsonSerializer
+                .DeserializeAsync(body, NextcloudJson.Default.OcsResponse, cancellationToken)
+                .ConfigureAwait(false);
+
+            // Only an object is an answer. A call that failed carries an empty array here.
+            data = envelope?.Ocs is { Data.ValueKind: JsonValueKind.Object } payload
+                ? JsonSerializer.Deserialize(payload.Data, typeInfo)
+                : null;
+        }
+        catch (JsonException exception)
+        {
+            throw new FormatException($"{uri} did not answer in an OCS envelope.", exception);
+        }
+
+        ThrowIfNotOk(envelope?.Ocs?.Meta, uri);
+
+        return data;
     }
 
     private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

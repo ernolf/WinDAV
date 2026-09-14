@@ -2289,6 +2289,8 @@ public sealed class DirectoryCacheTests
             return Task.FromResult(WriteETag);
         }
 
+        public IUpload? BeginUpload(string path) => null;
+
         public Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
 

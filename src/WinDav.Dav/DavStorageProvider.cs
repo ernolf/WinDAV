@@ -227,6 +227,12 @@ public abstract class DavStorageProvider : IStorageProvider
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Plain RFC 4918 has no way to take a file in pieces: a PUT is the whole of it.
+    /// </remarks>
+    public virtual IUpload? BeginUpload(string path) => null;
+
+    /// <inheritdoc/>
     public Task SetTimesAsync(string path, EntryTimes times, CancellationToken cancellationToken = default) =>
         WriteTimesAsync(path, times, cancellationToken);
 
@@ -518,18 +524,30 @@ public abstract class DavStorageProvider : IStorageProvider
         }
     }
 
+    /// <summary>
+    /// Reads a 412 on a write, which means one of two things and the request that got it says
+    /// which.
+    /// </summary>
+    /// <param name="exception">The refusal.</param>
+    /// <param name="mustBeNew">Whether the write asked to be the one that makes the name.</param>
+    /// <returns>
+    /// <see cref="ProviderError.AlreadyExists"/> where the write asked to make the name, since
+    /// the server is then saying somebody else made it and that nothing has been written, and
+    /// <see langword="null"/> otherwise. Where the write named a version, a 412 says the
+    /// version has moved on, which is not a name already taken.
+    /// </returns>
+    protected static ProviderError? Occupied(HttpRequestException exception, bool mustBeNew)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        return mustBeNew && exception.StatusCode == HttpStatusCode.PreconditionFailed
+            ? ProviderError.AlreadyExists
+            : null;
+    }
+
     // Whether the server wrote any of what it was sent. A property it will not have comes
     // back in a propstat of its own with a status outside 2xx, so one accepted property is
     // enough to say the request was worth sending.
-    // A 412 means one of two things and the request that got it says which. Where the write
-    // asked to be the one that makes the name, the server is saying somebody else made it and
-    // that nothing has been written; where it named a version, it is saying the version has
-    // moved on. Only the first is a name already taken.
-    private static ProviderError? Occupied(HttpRequestException exception, bool mustBeNew) =>
-        mustBeNew && exception.StatusCode == HttpStatusCode.PreconditionFailed
-            ? ProviderError.AlreadyExists
-            : null;
-
     private static bool Accepted(IReadOnlyList<DavResponse> answered, KeyValuePair<XName, string>[] properties)
     {
         foreach (DavResponse response in answered)

@@ -42,7 +42,7 @@ public sealed class NextcloudProviderFactory : DavProviderFactory
     /// <see cref="ProviderSettings.UserId"/> is missing. A Nextcloud file path has the user
     /// in it, so there is no such thing as reaching one without knowing who is asking.
     /// </exception>
-    protected override IStorageProvider CreateProvider(DavClient client, ProviderSettings settings)
+    protected override IStorageProvider CreateProvider(HttpClient httpClient, ProviderSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -53,6 +53,6 @@ public sealed class NextcloudProviderFactory : DavProviderFactory
             throw new ArgumentException("A Nextcloud account needs a user id.", nameof(settings));
         }
 
-        return NextcloudProvider.ForServer(client, settings.Server, userId, settings.RemotePath);
+        return NextcloudProvider.ForServer(httpClient, settings.Server, userId, settings.RemotePath);
     }
 }
