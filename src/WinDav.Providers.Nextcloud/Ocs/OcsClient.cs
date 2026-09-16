@@ -181,6 +181,10 @@ public sealed class OcsClient
 
     private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        // Asked for the way DavClient asks, so that the calls of one mount go the same way.
+        request.Version = HttpVersion.Version20;
+        request.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
+
         request.Headers.Add(ApiRequestHeader, "true");
 
         // Some of the older endpoints answer XML unless asked otherwise.
