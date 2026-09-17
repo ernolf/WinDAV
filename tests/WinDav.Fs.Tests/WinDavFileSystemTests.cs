@@ -1264,8 +1264,7 @@ public sealed class WinDavFileSystemTests
     [Fact]
     public async Task AWriteGoesOnWhileThePiecesTheStoreTakesAtOnceStillNeedIt()
     {
-        TaskCompletionSource room = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        FakeStore store = new() { PieceSize = 4, PiecesAtOnce = 2, PiecesHeld = room.Task };
+        FakeStore store = new() { PieceSize = 4, PiecesAtOnce = 2 };
 
         WinDavFileSystem fileSystem = Mount(store);
 
@@ -1277,12 +1276,60 @@ public sealed class WinDavFileSystemTests
 
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
 
-        // Nothing has been read yet, but two pieces at once and the one behind them need the
-        // writes three pieces ahead, which is as far as this one goes.
-        await Task.Run(() => WriteAt(fileSystem, fileDesc, 0, "hello world!"), cancellationToken)
+        // Twenty pieces go out, which is enough for the writes to be as far ahead as the
+        // pieces at once need.
+        string first = new('a', 84);
+        WriteAt(fileSystem, fileDesc, 0, first);
+
+        while (store.PiecesSent < 20)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
+        }
+
+        TaskCompletionSource room = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.PiecesHeld = room.Task;
+
+        // The next piece is on its way and has not been read, but two pieces at once and the
+        // one behind them need the writes three pieces ahead, which is as far as this one goes.
+        await Task.Run(() => WriteAt(fileSystem, fileDesc, 84, " again!!"), cancellationToken)
             .WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
 
         room.SetResult();
+
+        fileSystem.Cleanup(null, fileDesc, @"\big.bin", 0);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Equal(first + " again!!", store.ContentOf("/big.bin"));
+    }
+
+    [Fact]
+    public async Task AtTheStartAWriteIsHeldCloserThanThePiecesTheStoreTakesAtOnceNeed()
+    {
+        TaskCompletionSource room = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        FakeStore store = new() { PieceSize = 4, PiecesAtOnce = 2, PiecesHeld = room.Task, PiecesTravel = true };
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\big.bin", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        Task writing = Task.Run(() => WriteAt(fileSystem, fileDesc, 0, "hello world!"), cancellationToken);
+
+        // Two pieces at once would let the writes be three pieces ahead, but nothing has gone
+        // out yet, so they may only be one piece ahead, even though no further piece is ready
+        // to go while the two are on their way.
+        await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
+
+        Assert.False(writing.IsCompleted);
+
+        room.SetResult();
+
+        await writing.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
 
         fileSystem.Cleanup(null, fileDesc, @"\big.bin", 0);
         fileSystem.Close(null, fileDesc);
@@ -1293,8 +1340,7 @@ public sealed class WinDavFileSystemTests
     [Fact]
     public async Task AWriteIsNotHeldWhileNoPieceIsReadyToGo()
     {
-        TaskCompletionSource room = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        FakeStore store = new() { PieceSize = 4, PiecesHeld = room.Task, PiecesTravel = true };
+        FakeStore store = new() { PieceSize = 4 };
 
         WinDavFileSystem fileSystem = Mount(store);
 
@@ -1306,9 +1352,23 @@ public sealed class WinDavFileSystemTests
 
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
 
-        // Two pieces are on their way unread, further ahead than one at a time needs, but the
-        // third is not ready to go, so holding the write would keep the store waiting for it.
-        await Task.Run(() => WriteAt(fileSystem, fileDesc, 0, "hello world!"), cancellationToken)
+        // Ten pieces go out, which is enough for the writes to be as far ahead as one piece at
+        // a time needs.
+        string first = new('a', 44);
+        WriteAt(fileSystem, fileDesc, 0, first);
+
+        while (store.PiecesSent < 10)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
+        }
+
+        TaskCompletionSource room = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.PiecesHeld = room.Task;
+        store.PiecesTravel = true;
+
+        // Three pieces are on their way unread, further ahead than one at a time needs, but the
+        // next is not ready to go, so holding the write would keep the store waiting for it.
+        await Task.Run(() => WriteAt(fileSystem, fileDesc, 44, "hello world!"), cancellationToken)
             .WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
 
         room.SetResult();
@@ -1316,8 +1376,8 @@ public sealed class WinDavFileSystemTests
         fileSystem.Cleanup(null, fileDesc, @"\big.bin", 0);
         fileSystem.Close(null, fileDesc);
 
-        Assert.Equal("hello world!", store.ContentOf("/big.bin"));
-        Assert.Equal(2, store.PiecesSent);
+        Assert.Equal(first + "hello world!", store.ContentOf("/big.bin"));
+        Assert.Equal(13, store.PiecesSent);
     }
 
     [Fact]

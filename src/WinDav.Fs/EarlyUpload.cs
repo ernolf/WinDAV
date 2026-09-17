@@ -137,10 +137,17 @@ internal sealed class EarlyUpload : IAsyncDisposable
     /// what the pieces have read out while they travel: as many pieces as the store takes at
     /// once, which have to be written through before they can go, and one more. The count
     /// then moves as the bytes go out, not a piece at a time, and every piece the store has
-    /// room for still goes. While the store is still being asked how long a piece is, the
-    /// writes wait for the answer. Nothing is held while no piece is ready to go, so that a
-    /// piece the store has room for never waits for a held write, which can happen where the
-    /// pieces on their way are longer than the next one. Nothing is held either where nothing
+    /// room for still goes. That distance is not given from the first byte on: until the
+    /// pieces have read out enough, the writes may be one piece and a tenth of what has gone
+    /// out ahead, so that they run at most a tenth faster than the upload. A program copying a
+    /// file scales its speed graph to the fastest it has seen, and a whole distance taken at
+    /// the speed of the local disk would leave the speed of the upload a flat line below that.
+    /// While the store is still being asked how long a piece is, the writes wait for the
+    /// answer. Once the whole distance is given, nothing is held while no piece is ready to go,
+    /// so that a piece the store has room for never waits for a held write, which can happen
+    /// where the pieces on their way are longer than the next one. Before that, a store that
+    /// takes its pieces at once and reads them on its way would otherwise never have a write
+    /// held until all of its pieces are out. Nothing is held either where nothing
     /// is being sent ahead: where the store takes no pieces, once it is full, after a failure,
     /// or once a write went back over what had left.
     /// </remarks>
@@ -149,7 +156,7 @@ internal sealed class EarlyUpload : IAsyncDisposable
         while (true)
         {
             Task moved;
-            Task pump;
+            Task? pump;
 
             lock (_sync)
             {
@@ -157,21 +164,26 @@ internal sealed class EarlyUpload : IAsyncDisposable
                 // for, or the first writes would all go by before anything is measured.
                 bool measuring = _pieceSize == 0;
 
+                long ahead = Math.Min(_lead, _pieceSize + (_sent / 10));
+                bool ramping = ahead < _lead;
+
                 // A run that broke on something nothing here expected ends without saying so,
                 // and is taken for one that stopped. A run that is over has found no piece
                 // ready, and the next one starts once a write has made one.
-                if (!_running || _pump.IsCompleted || _sealed || _full || Failure is not null
+                if ((_running && _pump.IsCompleted) || _sealed || _full || Failure is not null
+                    || (!_running && (measuring || !ramping))
                     || _stage.Front is not long front
-                    || (!measuring && front - _sent <= _lead))
+                    || (!measuring && front - _sent <= ahead))
                 {
                     return;
                 }
 
                 moved = _moved.Task;
-                pump = _pump;
+                pump = _running ? _pump : null;
             }
 
-            Task.WaitAny([moved, pump], s_holdRecheck);
+            // A run that is over would end the wait at once, so only a running one is waited for.
+            Task.WaitAny(pump is null ? [moved] : [moved, pump], s_holdRecheck);
         }
     }
 
