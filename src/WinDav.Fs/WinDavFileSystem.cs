@@ -1072,6 +1072,16 @@ public sealed class WinDavFileSystem : FileSystemBase
         open.Early ??= EarlyUpload.Begin(_provider, open.Path, stage);
         open.Early?.Nudge();
 
+        // Held until the upload has caught up, so that a copy shows how far the network is
+        // and not how fast the local disk is. Not a write out of mapped pages: those come
+        // from the system's own threads, which nothing may keep waiting on the network.
+        // Waiting here is safe for WinFsp, which times out only requests it has not handed
+        // to the file system yet.
+        if (!constrainedIo)
+        {
+            open.Early?.Hold();
+        }
+
         bytesTransferred = (uint)count;
         fileInfo = FileInfoOf(open);
 

@@ -26,6 +26,11 @@ namespace WinDav.Fs;
 /// </remarks>
 internal sealed class EarlyUpload : IAsyncDisposable
 {
+    // How long a held write waits before it looks again without being woken. A write on
+    // another thread can stop the writes from being followed, and nothing wakes a held one
+    // for that.
+    private static readonly TimeSpan s_holdRecheck = TimeSpan.FromSeconds(1);
+
     private readonly IUpload _upload;
 
     private readonly WriteStage _stage;
@@ -44,11 +49,25 @@ internal sealed class EarlyUpload : IAsyncDisposable
     // Set once the store takes no more pieces ahead.
     private bool _full;
 
-    // How long a piece is, once the store has said. Zero until then, which starts the first
-    // run with the first byte written; that run asks.
+    // How long the next piece is, as the store last said. Zero until it first has, which
+    // starts the first run with the first byte written; that run asks.
     private long _pieceSize;
 
     private int _pieces;
+
+    // How far the writes may be ahead of what the pieces have read out: every piece that can
+    // be on its way at once, and the one being written through behind them, all as long as
+    // the next piece.
+    private long _lead;
+
+    // How much the pieces have read out, which is how far the network has taken them. A piece
+    // that ends without having been read through counts as read, since it is on its way no
+    // longer.
+    private long _sent;
+
+    // Completed and replaced whenever the pieces are read further or the sending stops, which
+    // is what a held write waits for.
+    private TaskCompletionSource _moved = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private EarlyUpload(IUpload upload, WriteStage stage)
     {
@@ -107,6 +126,56 @@ internal sealed class EarlyUpload : IAsyncDisposable
     }
 
     /// <summary>
+    /// Waits while the writes are further ahead of the upload than the pieces on their way
+    /// need, so that they keep pace with it instead of running ahead of it.
+    /// </summary>
+    /// <remarks>
+    /// A program copying a file counts its progress by the writes it has handed over. Without
+    /// this, those are taken as fast as the local disk allows, the count reaches the end long
+    /// before the store has the file, and the rest of the upload is spent at the last percent,
+    /// in the close that waits for it. Held here, the writes stay a fixed distance ahead of
+    /// what the pieces have read out while they travel: as many pieces as the store takes at
+    /// once, which have to be written through before they can go, and one more. The count
+    /// then moves as the bytes go out, not a piece at a time, and every piece the store has
+    /// room for still goes. While the store is still being asked how long a piece is, the
+    /// writes wait for the answer. Nothing is held while no piece is ready to go, so that a
+    /// piece the store has room for never waits for a held write, which can happen where the
+    /// pieces on their way are longer than the next one. Nothing is held either where nothing
+    /// is being sent ahead: where the store takes no pieces, once it is full, after a failure,
+    /// or once a write went back over what had left.
+    /// </remarks>
+    internal void Hold()
+    {
+        while (true)
+        {
+            Task moved;
+            Task pump;
+
+            lock (_sync)
+            {
+                // Until the store has said how long a piece is, the run that asks it is waited
+                // for, or the first writes would all go by before anything is measured.
+                bool measuring = _pieceSize == 0;
+
+                // A run that broke on something nothing here expected ends without saying so,
+                // and is taken for one that stopped. A run that is over has found no piece
+                // ready, and the next one starts once a write has made one.
+                if (!_running || _pump.IsCompleted || _sealed || _full || Failure is not null
+                    || _stage.Front is not long front
+                    || (!measuring && front - _sent <= _lead))
+                {
+                    return;
+                }
+
+                moved = _moved.Task;
+                pump = _pump;
+            }
+
+            Task.WaitAny([moved, pump], s_holdRecheck);
+        }
+    }
+
+    /// <summary>
     /// Stops the sending and waits until what was on its way has arrived or failed.
     /// </summary>
     /// <returns>A task that completes once nothing is being sent any more.</returns>
@@ -152,25 +221,33 @@ internal sealed class EarlyUpload : IAsyncDisposable
     {
         try
         {
-            // Asked on every run. The answer holds for the whole upload, so only the first run
-            // can have to wait for it.
-            long size = await _upload.GetPieceSizeAsync().ConfigureAwait(false);
+            int atOnce = 0;
 
-            if (!Measured(size))
+            while (true)
             {
-                return;
-            }
+                // Asked before every piece, because the store may size each one by how long the
+                // ones before it took.
+                long size = await _upload.GetPieceSizeAsync().ConfigureAwait(false);
 
-            while (Continues(size))
-            {
+                // Only asked where pieces go at all. The answer holds for the whole upload.
+                if (atOnce == 0 && size > 0)
+                {
+                    atOnce = await _upload.GetPiecesAtOnceAsync().ConfigureAwait(false);
+                }
+
+                if (!Measured(size, atOnce) || !Continues(size))
+                {
+                    return;
+                }
+
                 // Only this claims, so a piece that was ready a moment ago still is, unless a
                 // write in between went back over what had left.
-                if (_stage.Claim(size) is not Stream piece)
+                if (_stage.Claim(size) is not Stream claimed)
                 {
                     continue;
                 }
 
-                if (!await _upload.SendAsync(piece).ConfigureAwait(false))
+                if (!await _upload.SendAsync(new CountedPiece(claimed, this)).ConfigureAwait(false))
                 {
                     // The store takes no more ahead, and the piece goes with the rest.
                     _stage.Unclaim(size);
@@ -196,19 +273,22 @@ internal sealed class EarlyUpload : IAsyncDisposable
         }
     }
 
-    // Notes how long a piece is. A store that takes nothing ahead is full from the start, and
-    // the whole file goes with the finish.
-    private bool Measured(long size)
+    // Notes how long a piece is and how many go at once. A store that takes nothing ahead is
+    // full from the start, and the whole file goes with the finish.
+    private bool Measured(long size, int atOnce)
     {
         lock (_sync)
         {
             _pieceSize = size;
+            _lead = (atOnce + 1L) * size;
 
             if (size == 0)
             {
                 _full = true;
                 _running = false;
             }
+
+            Signal();
 
             return size > 0;
         }
@@ -232,6 +312,8 @@ internal sealed class EarlyUpload : IAsyncDisposable
         {
             _sealed = true;
 
+            Signal();
+
             return _pump;
         }
     }
@@ -242,6 +324,8 @@ internal sealed class EarlyUpload : IAsyncDisposable
         {
             _full = true;
             _running = false;
+
+            Signal();
         }
     }
 
@@ -251,6 +335,114 @@ internal sealed class EarlyUpload : IAsyncDisposable
         {
             Failure = exception;
             _running = false;
+
+            Signal();
+        }
+    }
+
+    private void Sent(long count)
+    {
+        lock (_sync)
+        {
+            _sent += count;
+
+            Signal();
+        }
+    }
+
+    // Wakes the writes held for the sending. Called under the lock.
+    private void Signal()
+    {
+        _moved.TrySetResult();
+        _moved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    // A piece that tells the upload how far it has been read. The store reads it while it
+    // travels, so that is how far the network has taken it.
+    private sealed class CountedPiece(Stream inner, EarlyUpload upload) : Stream
+    {
+        // The furthest it has been read. A piece read again from its start, as a request sent
+        // a second time is, counts only what goes past that.
+        private long _reached;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => true;
+
+        public override bool CanWrite => false;
+
+        public override long Length => inner.Length;
+
+        public override long Position
+        {
+            get => inner.Position;
+            set => inner.Position = value;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            ValidateBufferArguments(buffer, offset, count);
+
+            return Read(buffer.AsSpan(offset, count));
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            int read = inner.Read(buffer);
+
+            Reached(inner.Position);
+
+            return read;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            ValidateBufferArguments(buffer, offset, count);
+
+            return ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            int read = await inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+
+            Reached(inner.Position);
+
+            return read;
+        }
+
+        public override void Flush()
+        {
+            // Nothing is written, so there is nothing to flush.
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // Taken, refused or failed, it is on its way no longer.
+                Reached(inner.Length);
+
+                inner.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+
+        private void Reached(long position)
+        {
+            if (position > _reached)
+            {
+                upload.Sent(position - _reached);
+
+                _reached = position;
+            }
         }
     }
 }

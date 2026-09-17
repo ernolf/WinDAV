@@ -93,6 +93,12 @@ public sealed class NextcloudProvider : DavStorageProvider
 
     private static readonly TimeSpan s_longestAssembly = TimeSpan.FromMinutes(30);
 
+    // How long one chunk sent ahead is meant to take. The desktop client sizes its chunks by
+    // how long they take, towards a minute (targetChunkUploadDuration). What goes ahead is kept
+    // shorter here, because a program copying a file onto the mount has counted every byte
+    // written ahead of the chunks on their way, and waits at its end for as long as they take.
+    private static readonly TimeSpan s_chunkDuration = TimeSpan.FromSeconds(10);
+
     // The properties every PROPFIND asks for: the five of RFC 4918 the seam reads, the
     // creation date, and the two of the vendor namespaces.
     private static readonly XName[] s_properties =
@@ -884,14 +890,24 @@ public sealed class NextcloudProvider : DavStorageProvider
     {
         private readonly List<Task> _inFlight = [];
 
+        private readonly Lock _sizing = new();
+
         // Made with the first piece, and forgotten once it has been taken away.
         private Uri? _folder;
 
-        // What the pieces are measured by, kept from the first question on, because the rest
-        // is counted on from them.
+        // What the pieces are measured by, kept from the first question on, so that every
+        // piece of the upload is held to the same.
         private ChunkLimits? _limits;
 
+        // How long the next piece is to be. It starts at the smallest a chunk may be, so that a
+        // slow line does not have to send a large one first, and then follows how long the
+        // chunks take, up to what the server allows. Set as the chunks are answered.
+        private long _pieceSize = SmallestChunkSize;
+
         private int _pieces;
+
+        // The bytes of all pieces, which the length of the whole file is counted on from.
+        private long _piecesLength;
 
         private bool _finished;
 
@@ -906,8 +922,25 @@ public sealed class NextcloudProvider : DavStorageProvider
 
         private string What => $"Writing {DavPath.Normalise(path)}";
 
-        public async Task<long> GetPieceSizeAsync(CancellationToken cancellationToken) =>
-            (await GetLimitsAsync(cancellationToken).ConfigureAwait(false)).Size;
+        public async Task<long> GetPieceSizeAsync(CancellationToken cancellationToken)
+        {
+            ChunkLimits limits = await GetLimitsAsync(cancellationToken).ConfigureAwait(false);
+
+            // The pieces may use only half of the names, and on a slow line they stay at the
+            // smallest size, which would use those names up after 24 GiB. Once a quarter of the
+            // names is left, the smallest piece doubles with every halving of what is left, so
+            // that the pieces go on ahead of a larger file rather than leave it to the close.
+            long left = Math.Max(1, (MaximumChunks / 2) - _pieces);
+            long smallest = Math.Min(Math.Max(SmallestChunkSize, SmallestChunkSize * (MaximumChunks / 4) / left), limits.Size);
+
+            lock (_sizing)
+            {
+                return limits.Size == 0 ? 0 : Math.Max(_pieceSize, smallest);
+            }
+        }
+
+        public async Task<int> GetPiecesAtOnceAsync(CancellationToken cancellationToken) =>
+            (await GetLimitsAsync(cancellationToken).ConfigureAwait(false)).InFlight;
 
         public async Task<bool> SendAsync(Stream piece, CancellationToken cancellationToken)
         {
@@ -933,9 +966,12 @@ public sealed class NextcloudProvider : DavStorageProvider
                     return false;
                 }
 
-                if (!piece.CanSeek || piece.Length - piece.Position != limits.Size)
+                long length = piece.CanSeek ? piece.Length - piece.Position : -1;
+                if (length < SmallestChunkSize || length > limits.Size)
                 {
-                    throw new ArgumentException($"A piece has to be {limits.Size} bytes long.", nameof(piece));
+                    throw new ArgumentException(
+                        $"A piece has to be between {SmallestChunkSize} and {limits.Size} bytes long.",
+                        nameof(piece));
                 }
 
                 KeyValuePair<string, string>[] headers = [new(DestinationHeader, Target.AbsoluteUri)];
@@ -961,12 +997,11 @@ public sealed class NextcloudProvider : DavStorageProvider
                 }
 
                 _pieces++;
+                _piecesLength += length;
 
-                // Not the caller's token: what is out is waited for rather than called back, so
-                // that the directory is only taken away once nothing is on its way into it.
                 Uri chunk = new(folder, ChunkName(_pieces));
                 handedOn = true;
-                _inFlight.Add(provider.SendChunkAsync(chunk, piece, headers, CancellationToken.None));
+                _inFlight.Add(SendTimedAsync(chunk, piece, length, limits, headers));
 
                 return true;
             }
@@ -1016,7 +1051,7 @@ public sealed class NextcloudProvider : DavStorageProvider
             }
 
             long tail = rest.Length - rest.Position;
-            long length = ((long)_pieces * limits.Size) + tail;
+            long length = _piecesLength + tail;
 
             KeyValuePair<string, string>[] headers =
             [
@@ -1074,6 +1109,37 @@ public sealed class NextcloudProvider : DavStorageProvider
             _limits = limits;
 
             return limits;
+        }
+
+        // Not the caller's token: what is out is waited for rather than called back, so that
+        // the directory is only taken away once nothing is on its way into it. Timed from when
+        // the chunk goes, not from when it began to wait for its turn.
+        private async Task SendTimedAsync(
+            Uri chunk,
+            Stream piece,
+            long length,
+            ChunkLimits limits,
+            KeyValuePair<string, string>[] headers)
+        {
+            long started = Stopwatch.GetTimestamp();
+
+            await provider.SendChunkAsync(chunk, piece, headers, CancellationToken.None).ConfigureAwait(false);
+
+            Took(length, Stopwatch.GetElapsedTime(started), limits);
+        }
+
+        // Sizes the next pieces the way the desktop client does: the size that would have
+        // taken the time meant, averaged with the size so far, so that a chunk slowed or sped
+        // by something else moves it only halfway.
+        private void Took(long length, TimeSpan elapsed, ChunkLimits limits)
+        {
+            long milliseconds = Math.Max(1L, (long)elapsed.TotalMilliseconds);
+            long fitting = length * (long)s_chunkDuration.TotalMilliseconds / milliseconds;
+
+            lock (_sizing)
+            {
+                _pieceSize = Math.Clamp((_pieceSize / 2) + (fitting / 2), SmallestChunkSize, limits.Size);
+            }
         }
 
         // The directory the chunks go into. It is noted before it is asked for, so that one

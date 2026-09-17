@@ -153,6 +153,21 @@ internal sealed class WriteStage : IDisposable
     }
 
     /// <summary>
+    /// Gets how far the file has been written without a gap, or <see langword="null"/> where
+    /// the writes are not followed for pieces to go ahead, or no longer are.
+    /// </summary>
+    internal long? Front
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _disturbed || _whole ? null : _written;
+            }
+        }
+    }
+
+    /// <summary>
     /// Takes what was handed over at an offset, lengthening the file where it has to.
     /// </summary>
     /// <param name="offset">Where the bytes go, counted from the start of the file.</param>

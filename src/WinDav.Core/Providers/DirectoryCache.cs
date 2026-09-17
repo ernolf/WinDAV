@@ -1445,6 +1445,9 @@ public sealed class DirectoryCache : IStorageProvider
         public Task<long> GetPieceSizeAsync(CancellationToken cancellationToken) =>
             inner.GetPieceSizeAsync(cancellationToken);
 
+        public Task<int> GetPiecesAtOnceAsync(CancellationToken cancellationToken) =>
+            inner.GetPiecesAtOnceAsync(cancellationToken);
+
         public async Task<bool> SendAsync(Stream piece, CancellationToken cancellationToken)
         {
             // Measured before it is handed on: from then on it is read while it travels.
