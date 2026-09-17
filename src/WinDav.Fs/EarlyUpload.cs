@@ -55,6 +55,11 @@ internal sealed class EarlyUpload : IAsyncDisposable
 
     private int _pieces;
 
+    // How long the file may get and still go whole, as the store said with the first piece
+    // size. No piece goes before the writes are past it, unless the file was made longer
+    // than that before it was written.
+    private long _longestWhole;
+
     // How far the writes may be ahead of what the pieces have read out: every piece that can
     // be on its way at once, and the one being written through behind them, all as long as
     // the next piece.
@@ -115,7 +120,7 @@ internal sealed class EarlyUpload : IAsyncDisposable
     {
         lock (_sync)
         {
-            if (_running || _sealed || _full || Failure is not null || !_stage.CanClaim(_pieceSize))
+            if (_running || _sealed || _full || Failure is not null || !_stage.CanClaim(Needed(_pieceSize)))
             {
                 return;
             }
@@ -148,8 +153,9 @@ internal sealed class EarlyUpload : IAsyncDisposable
     /// where the pieces on their way are longer than the next one. Before that, a store that
     /// takes its pieces at once and reads them on its way would otherwise never have a write
     /// held until all of its pieces are out. Nothing is held either where nothing
-    /// is being sent ahead: where the store takes no pieces, once it is full, after a failure,
-    /// or once a write went back over what had left.
+    /// is being sent ahead: where the store takes no pieces, before the file is long enough for
+    /// the first one, once it is full, after a failure, or once a write went back over what had
+    /// left.
     /// </remarks>
     internal void Hold()
     {
@@ -171,7 +177,7 @@ internal sealed class EarlyUpload : IAsyncDisposable
                 // and is taken for one that stopped. A run that is over has found no piece
                 // ready, and the next one starts once a write has made one.
                 if ((_running && _pump.IsCompleted) || _sealed || _full || Failure is not null
-                    || (!_running && (measuring || !ramping))
+                    || (!_running && (measuring || !ramping || _pieces == 0))
                     || _stage.Front is not long front
                     || (!measuring && front - _sent <= ahead))
                 {
@@ -234,6 +240,7 @@ internal sealed class EarlyUpload : IAsyncDisposable
         try
         {
             int atOnce = 0;
+            long longestWhole = 0;
 
             while (true)
             {
@@ -241,13 +248,14 @@ internal sealed class EarlyUpload : IAsyncDisposable
                 // ones before it took.
                 long size = await _upload.GetPieceSizeAsync().ConfigureAwait(false);
 
-                // Only asked where pieces go at all. The answer holds for the whole upload.
+                // Only asked where pieces go at all. The answers hold for the whole upload.
                 if (atOnce == 0 && size > 0)
                 {
                     atOnce = await _upload.GetPiecesAtOnceAsync().ConfigureAwait(false);
+                    longestWhole = await _upload.GetLongestWholeAsync().ConfigureAwait(false);
                 }
 
-                if (!Measured(size, atOnce) || !Continues(size))
+                if (!Measured(size, atOnce, longestWhole) || !Continues(size))
                 {
                     return;
                 }
@@ -285,13 +293,15 @@ internal sealed class EarlyUpload : IAsyncDisposable
         }
     }
 
-    // Notes how long a piece is and how many go at once. A store that takes nothing ahead is
-    // full from the start, and the whole file goes with the finish.
-    private bool Measured(long size, int atOnce)
+    // Notes how long a piece is, how many go at once and how long the file may get and still
+    // go whole. A store that takes nothing ahead is full from the start, and the whole file
+    // goes with the finish.
+    private bool Measured(long size, int atOnce, long longestWhole)
     {
         lock (_sync)
         {
             _pieceSize = size;
+            _longestWhole = longestWhole;
             _lead = (atOnce + 1L) * size;
 
             if (size == 0)
@@ -312,11 +322,20 @@ internal sealed class EarlyUpload : IAsyncDisposable
     {
         lock (_sync)
         {
-            _running = !_sealed && _stage.CanClaim(size);
+            _running = !_sealed && _stage.CanClaim(Needed(size));
 
             return _running;
         }
     }
+
+    // How far the writes have to be past what was claimed before a piece of this size can go:
+    // the piece itself, and before the first one the whole length a file may go whole up to.
+    // A program copying a file sets its length before it writes, and a file already longer
+    // than that goes ahead from the first piece on, so that the writes are held from the
+    // start and a copy does not show the speed of the local disk until they reach it.
+    // Called under the lock.
+    private long Needed(long size) =>
+        _pieces == 0 && _stage.Length <= _longestWhole ? Math.Max(size, _longestWhole) : size;
 
     private Task Seal()
     {

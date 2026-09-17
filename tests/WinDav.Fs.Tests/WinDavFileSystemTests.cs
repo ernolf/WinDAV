@@ -1227,6 +1227,92 @@ public sealed class WinDavFileSystemTests
     }
 
     [Fact]
+    public void AFileNoLongerThanTheStoreTakesWholeSendsNoPieces()
+    {
+        FakeStore store = new() { PieceSize = 4, LongestWhole = 12 };
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\big.bin", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        WriteAt(fileSystem, fileDesc, 0, "hello world!");
+
+        fileSystem.Cleanup(null, fileDesc, @"\big.bin", 0);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Equal("hello world!", store.ContentOf("/big.bin"));
+        Assert.Equal(0, store.PiecesSent);
+        Assert.Empty(store.Assembled);
+        Assert.Single(store.Writes);
+    }
+
+    [Fact]
+    public void AFileMadeLongerThanTheStoreTakesWholeGoesAheadBeforeItIsWrittenThatFar()
+    {
+        FakeStore store = new() { PieceSize = 4, LongestWhole = 20 };
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\big.bin", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        // Set the way a program copying a file sets it before the first write.
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            fileSystem.SetFileSize(null, fileDesc, 24, false, out _));
+
+        WriteAt(fileSystem, fileDesc, 0, "hello world!");
+
+        // Twelve bytes are short of what goes whole, and still two pieces go.
+        Assert.True(SpinWait.SpinUntil(() => store.PiecesSent == 2, TimeSpan.FromSeconds(10)));
+
+        WriteAt(fileSystem, fileDesc, 12, "hello world!");
+
+        fileSystem.Cleanup(null, fileDesc, @"\big.bin", 0);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Equal("hello world!hello world!", store.ContentOf("/big.bin"));
+        Assert.Equal("/big.bin", Assert.Single(store.Assembled));
+        Assert.Equal(5, store.PiecesSent);
+        Assert.Empty(store.Writes);
+    }
+
+    [Fact]
+    public void AFileLongerThanTheStoreTakesWholeGoesAheadInPieces()
+    {
+        FakeStore store = new() { PieceSize = 4, LongestWhole = 12 };
+
+        WinDavFileSystem fileSystem = Mount(store);
+
+        Assert.Equal(
+            FileSystemBase.STATUS_SUCCESS,
+            CreateFile(fileSystem, @"\big.bin", out object? fileDesc, out _));
+
+        Assert.NotNull(fileDesc);
+
+        WriteAt(fileSystem, fileDesc, 0, "hello world!!");
+
+        // One byte past what goes whole lets the pieces go, three of them, and the byte left
+        // stays behind for the rest.
+        Assert.True(SpinWait.SpinUntil(() => store.PiecesSent == 3, TimeSpan.FromSeconds(10)));
+
+        fileSystem.Cleanup(null, fileDesc, @"\big.bin", 0);
+        fileSystem.Close(null, fileDesc);
+
+        Assert.Equal("hello world!!", store.ContentOf("/big.bin"));
+        Assert.Equal("/big.bin", Assert.Single(store.Assembled));
+        Assert.Equal(3, store.PiecesSent);
+        Assert.Empty(store.Writes);
+    }
+
+    [Fact]
     public async Task AWriteWaitsWhileItIsFurtherAheadOfThePiecesThanTheyNeed()
     {
         TaskCompletionSource room = new(TaskCreationOptions.RunContinuationsAsynchronously);

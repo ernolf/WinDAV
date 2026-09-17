@@ -67,6 +67,10 @@ internal sealed class FakeStore : IStorageProvider
     // How many pieces the store takes on their way at once. One by default.
     public int PiecesAtOnce { get; set; } = 1;
 
+    // How long a file may get and still go whole. Nothing by default, which is a store that
+    // takes pieces from the first one on.
+    public long LongestWhole { get; set; }
+
     // Set to refuse every piece, the way a store that has run out of room does.
     public bool RefusePieces { get; set; }
 
@@ -469,6 +473,8 @@ internal sealed class FakeStore : IStorageProvider
         }
 
         public Task<int> GetPiecesAtOnceAsync(CancellationToken cancellationToken) => Task.FromResult(store.PiecesAtOnce);
+
+        public Task<long> GetLongestWholeAsync(CancellationToken cancellationToken) => Task.FromResult(store.LongestWhole);
 
         // The piece is the upload's once handed over, taken or refused.
         public async Task<bool> SendAsync(Stream piece, CancellationToken cancellationToken)

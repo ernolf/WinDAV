@@ -1448,6 +1448,9 @@ public sealed class DirectoryCache : IStorageProvider
         public Task<int> GetPiecesAtOnceAsync(CancellationToken cancellationToken) =>
             inner.GetPiecesAtOnceAsync(cancellationToken);
 
+        public Task<long> GetLongestWholeAsync(CancellationToken cancellationToken) =>
+            inner.GetLongestWholeAsync(cancellationToken);
+
         public async Task<bool> SendAsync(Stream piece, CancellationToken cancellationToken)
         {
             // Measured before it is handed on: from then on it is read while it travels.
