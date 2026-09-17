@@ -339,6 +339,13 @@ public sealed class NextcloudProvider : DavStorageProvider
     /// go ahead; the other half is kept for the rest, whose chunks grow where it would not
     /// fit otherwise.
     /// </para>
+    /// <para>
+    /// No chunk goes ahead before the file is longer than two rounds of the smallest chunks
+    /// the server takes at once, or than the largest chunk where that is less. Up to there,
+    /// the chunks save at most one round over a single PUT and cost the upload directory and
+    /// the assembly, which on local storage copies the file once more, so such a file goes
+    /// whole.
+    /// </para>
     /// </remarks>
     public override IUpload? BeginUpload(string path) => new ChunkedUpload(this, path);
 
@@ -941,6 +948,13 @@ public sealed class NextcloudProvider : DavStorageProvider
 
         public async Task<int> GetPiecesAtOnceAsync(CancellationToken cancellationToken) =>
             (await GetLimitsAsync(cancellationToken).ConfigureAwait(false)).InFlight;
+
+        public async Task<long> GetLongestWholeAsync(CancellationToken cancellationToken)
+        {
+            ChunkLimits limits = await GetLimitsAsync(cancellationToken).ConfigureAwait(false);
+
+            return Math.Min(2L * limits.InFlight * SmallestChunkSize, limits.Size);
+        }
 
         public async Task<bool> SendAsync(Stream piece, CancellationToken cancellationToken)
         {

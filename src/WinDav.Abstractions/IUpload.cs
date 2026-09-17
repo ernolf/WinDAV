@@ -54,6 +54,22 @@ public interface IUpload : IAsyncDisposable
     Task<int> GetPiecesAtOnceAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Asks how long a file may get and still go whole.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>
+    /// The length in bytes up to which the file goes whole with <see cref="FinishAsync"/>, or
+    /// zero where pieces may go from the first one on.
+    /// </returns>
+    /// <remarks>
+    /// Pieces cost a store requests of their own and the work of putting them together, which
+    /// a short file does not win back, so no piece goes before the file has been written past
+    /// this length. The answer holds for the whole upload.
+    /// </remarks>
+    /// <exception cref="ProviderException">The store could not find out.</exception>
+    Task<long> GetLongestWholeAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Sends the next piece of the file.
     /// </summary>
     /// <param name="piece">

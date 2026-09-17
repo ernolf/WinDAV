@@ -887,6 +887,20 @@ public sealed class NextcloudProviderTests
         Assert.Empty(handler.Exchanges);
     }
 
+    [Theory]
+    [InlineData("""{"max_size":104857600,"max_parallel_count":5}""", 50L * 1024 * 1024)]
+    [InlineData("""{"max_size":20971520,"max_parallel_count":5}""", 20L * 1024 * 1024)]
+    public async Task AnUploadBegunAheadLeavesAFileWholeUpToTwoRoundsOfTheSmallestChunks(string chunkedUpload, long longestWhole)
+    {
+        RecordingHandler handler = new() { Capabilities = CapabilitiesStating(chunkedUpload) };
+        using HttpClient httpClient = new(handler);
+
+        await using IUpload? upload = Provider(httpClient).BeginUpload("/big.bin");
+
+        Assert.NotNull(upload);
+        Assert.Equal(longestWhole, await upload.GetLongestWholeAsync(TestContext.Current.CancellationToken));
+    }
+
     [Fact]
     public async Task AnUploadBegunAheadSizesItsPiecesByHowLongTheChunksTake()
     {
