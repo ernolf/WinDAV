@@ -25,19 +25,33 @@ namespace WinDav.Abstractions;
 public interface IUpload : IAsyncDisposable
 {
     /// <summary>
-    /// Asks how long every piece has to be.
+    /// Asks how long the next piece has to be.
     /// </summary>
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>
-    /// The length of a piece in bytes, or zero when the upload takes no pieces ahead and the
-    /// whole file goes with <see cref="FinishAsync"/>.
+    /// The length of the next piece in bytes, or zero when the upload takes no pieces ahead
+    /// and the whole file goes with <see cref="FinishAsync"/>.
     /// </returns>
     /// <remarks>
     /// A store may have to ask its server first, which is why this is not known before the
-    /// upload is asked. The answer holds for the whole upload.
+    /// upload is asked. It is asked again before every piece, because a store may size its
+    /// pieces by how long the ones before took. Zero holds for the whole upload.
     /// </remarks>
     /// <exception cref="ProviderException">The store could not find out.</exception>
     Task<long> GetPieceSizeAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Asks how many pieces can be on their way at one time.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>How many pieces travel at once at most, which is at least one.</returns>
+    /// <remarks>
+    /// A piece can only go once it has been written through, so whoever writes the file has
+    /// to be this many pieces ahead of the upload to keep all of them going. The answer holds
+    /// for the whole upload.
+    /// </remarks>
+    /// <exception cref="ProviderException">The store could not find out.</exception>
+    Task<int> GetPiecesAtOnceAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sends the next piece of the file.
@@ -45,7 +59,7 @@ public interface IUpload : IAsyncDisposable
     /// <param name="piece">
     /// The bytes that follow the pieces already sent, read from where the stream stands to
     /// its end, which is exactly one piece of the length <see cref="GetPieceSizeAsync"/>
-    /// gives. The stream is the upload's from here on: it is still read after this returns,
+    /// gave when it was last asked. The stream is the upload's from here on: it is still read after this returns,
     /// while the piece travels, and the upload disposes of it whatever becomes of the piece.
     /// </param>
     /// <param name="cancellationToken">Cancels the operation.</param>
@@ -61,8 +75,8 @@ public interface IUpload : IAsyncDisposable
     /// finished, only disposed.
     /// </remarks>
     /// <exception cref="ArgumentException">
-    /// <paramref name="piece"/> is null, cannot say how long it is, or does not hold exactly
-    /// one piece.
+    /// <paramref name="piece"/> is null, cannot say how long it is, or is longer or shorter
+    /// than a piece of this upload can be.
     /// </exception>
     /// <exception cref="InvalidOperationException">
     /// The upload has been finished, or a piece of it failed.

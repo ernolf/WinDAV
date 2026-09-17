@@ -365,6 +365,9 @@ public sealed class AttributeCache : IStorageProvider
         public Task<long> GetPieceSizeAsync(CancellationToken cancellationToken) =>
             inner.GetPieceSizeAsync(cancellationToken);
 
+        public Task<int> GetPiecesAtOnceAsync(CancellationToken cancellationToken) =>
+            inner.GetPiecesAtOnceAsync(cancellationToken);
+
         public Task<bool> SendAsync(Stream piece, CancellationToken cancellationToken) =>
             inner.SendAsync(piece, cancellationToken);
 

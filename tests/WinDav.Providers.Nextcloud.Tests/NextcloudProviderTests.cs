@@ -872,7 +872,7 @@ public sealed class NextcloudProviderTests
     }
 
     [Fact]
-    public async Task AnUploadBegunAheadAsksForPiecesAsLargeAsTheServerStates()
+    public async Task AnUploadBegunAheadStartsWithTheSmallestPiecesAndAsManyAtOnceAsTheServerStates()
     {
         RecordingHandler handler = new() { Capabilities = CapabilitiesStating("""{"max_size":6291456,"max_parallel_count":2}""") };
         using HttpClient httpClient = new(handler);
@@ -880,10 +880,49 @@ public sealed class NextcloudProviderTests
         await using IUpload? upload = Provider(httpClient).BeginUpload("/big.bin");
 
         Assert.NotNull(upload);
-        Assert.Equal(6L * 1024 * 1024, await upload.GetPieceSizeAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(5L * 1024 * 1024, await upload.GetPieceSizeAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(2, await upload.GetPiecesAtOnceAsync(TestContext.Current.CancellationToken));
 
         // Asking is not sending: nothing has been made on the server.
         Assert.Empty(handler.Exchanges);
+    }
+
+    [Fact]
+    public async Task AnUploadBegunAheadSizesItsPiecesByHowLongTheChunksTake()
+    {
+        RecordingHandler handler = new() { Capabilities = CapabilitiesStating("""{"max_size":8388608,"max_parallel_count":1}""") };
+        using HttpClient httpClient = new(handler);
+        const int Larger = 8 * 1024 * 1024;
+        byte[] bytes = Pattern((int)(ChunkSize * 2) + Larger + 7);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        await using IUpload? upload = Provider(httpClient).BeginUpload("/big.bin");
+
+        Assert.NotNull(upload);
+        Assert.True(await upload.SendAsync(new MemoryStream(bytes, 0, (int)ChunkSize), cancellationToken));
+
+        // One at a time, so the second piece goes once the first is answered, and the test
+        // server answers far quicker than a chunk is meant to take.
+        Assert.True(await upload.SendAsync(new MemoryStream(bytes, (int)ChunkSize, (int)ChunkSize), cancellationToken));
+        Assert.Equal(Larger, await upload.GetPieceSizeAsync(cancellationToken));
+        Assert.True(await upload.SendAsync(new MemoryStream(bytes, (int)(ChunkSize * 2), Larger), cancellationToken));
+
+        int sentAhead = (int)(ChunkSize * 2) + Larger;
+        using MemoryStream rest = new(bytes, sentAhead, bytes.Length - sentAhead);
+
+        await upload.FinishAsync(rest, cancellationToken: cancellationToken);
+
+        Exchange[] chunks = [.. handler.Exchanges
+            .Where(exchange => exchange.Method == "PUT")
+            .OrderBy(exchange => exchange.Uri.AbsoluteUri, StringComparer.Ordinal)];
+
+        Assert.Equal([(int)ChunkSize, (int)ChunkSize, Larger, 7], chunks.Select(chunk => chunk.Body.Length));
+
+        byte[] sent = [.. chunks.SelectMany(chunk => chunk.Body.ToArray())];
+        Assert.True(bytes.AsSpan().SequenceEqual(sent));
+
+        // The length of the file is counted from the pieces as they were, not as the last one.
+        Assert.Equal(bytes.Length.ToString(CultureInfo.InvariantCulture), handler.Exchanges[^1].TotalLength);
     }
 
     [Fact]

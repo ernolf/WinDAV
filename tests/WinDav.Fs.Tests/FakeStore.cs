@@ -60,8 +60,23 @@ internal sealed class FakeStore : IStorageProvider
     // default, which is a store that takes a file only whole.
     public int? PieceSize { get; set; }
 
+    // Set to size every piece after the first differently, the way a store that sizes its
+    // pieces by how long the first one took does.
+    public int? LaterPieceSize { get; set; }
+
+    // How many pieces the store takes on their way at once. One by default.
+    public int PiecesAtOnce { get; set; } = 1;
+
     // Set to refuse every piece, the way a store that has run out of room does.
     public bool RefusePieces { get; set; }
+
+    // Set to keep every piece waiting until it completes, the way a store with all of its
+    // pieces still on their way does.
+    public Task? PiecesHeld { get; set; }
+
+    // Set to take every piece at once and read it afterwards, the way a store with room for
+    // all of its pieces on their way does.
+    public bool PiecesTravel { get; set; }
 
     // The pieces taken and refused, and the uploads let go unfinished. Counted on the thread
     // that sends ahead, so read with a barrier.
@@ -435,35 +450,47 @@ internal sealed class FakeStore : IStorageProvider
     // when the entry changes and not before.
     private sealed class FakeUpload(FakeStore store, string path, int pieceSize) : IUpload
     {
-        private readonly List<byte> _bytes = [];
+        // One entry per piece, in the order they were sent, filled in once a piece is read,
+        // which for a piece that travels is on another thread.
+        private readonly List<byte[]> _pieces = [];
+
+        private readonly Lock _gate = new();
+
+        private readonly List<Task> _travelling = [];
 
         private bool _finished;
 
-        public Task<long> GetPieceSizeAsync(CancellationToken cancellationToken) => Task.FromResult<long>(pieceSize);
+        public Task<long> GetPieceSizeAsync(CancellationToken cancellationToken)
+        {
+            lock (_gate)
+            {
+                return Task.FromResult<long>(_pieces.Count > 0 && store.LaterPieceSize is int later ? later : pieceSize);
+            }
+        }
+
+        public Task<int> GetPiecesAtOnceAsync(CancellationToken cancellationToken) => Task.FromResult(store.PiecesAtOnce);
 
         // The piece is the upload's once handed over, taken or refused.
         public async Task<bool> SendAsync(Stream piece, CancellationToken cancellationToken)
         {
-            try
+            int number;
+
+            lock (_gate)
             {
-                if (store.RefusePieces)
-                {
-                    store.CountRefused();
+                number = _pieces.Count;
+                _pieces.Add([]);
+            }
 
-                    throw new ProviderException(ProviderError.InsufficientStorage);
-                }
-
-                byte[] bytes = new byte[piece.Length - piece.Position];
-                piece.ReadExactly(bytes);
-                _bytes.AddRange(bytes);
-                store.CountSent();
+            if (store.PiecesTravel)
+            {
+                _travelling.Add(TakeAsync(piece, number));
 
                 return true;
             }
-            finally
-            {
-                await piece.DisposeAsync().ConfigureAwait(false);
-            }
+
+            await TakeAsync(piece, number).ConfigureAwait(false);
+
+            return true;
         }
 
         public async Task<string?> FinishAsync(
@@ -475,6 +502,8 @@ internal sealed class FakeStore : IStorageProvider
         {
             _finished = true;
 
+            await Task.WhenAll(_travelling).ConfigureAwait(false);
+
             store.Fail();
             store.Guard(path, ifMatch, mustBeNew);
 
@@ -482,7 +511,14 @@ internal sealed class FakeStore : IStorageProvider
 
             await rest.CopyToAsync(taken, cancellationToken).ConfigureAwait(false);
 
-            byte[] bytes = [.. _bytes, .. taken.ToArray()];
+            byte[] sentAhead;
+
+            lock (_gate)
+            {
+                sentAhead = [.. _pieces.SelectMany(piece => piece)];
+            }
+
+            byte[] bytes = [.. sentAhead, .. taken.ToArray()];
 
             store.Assembled.Add(path);
 
@@ -497,6 +533,38 @@ internal sealed class FakeStore : IStorageProvider
             }
 
             return ValueTask.CompletedTask;
+        }
+
+        private async Task TakeAsync(Stream piece, int number)
+        {
+            try
+            {
+                if (store.PiecesHeld is Task held)
+                {
+                    await held.ConfigureAwait(false);
+                }
+
+                if (store.RefusePieces)
+                {
+                    store.CountRefused();
+
+                    throw new ProviderException(ProviderError.InsufficientStorage);
+                }
+
+                byte[] bytes = new byte[piece.Length - piece.Position];
+                piece.ReadExactly(bytes);
+
+                lock (_gate)
+                {
+                    _pieces[number] = bytes;
+                }
+
+                store.CountSent();
+            }
+            finally
+            {
+                await piece.DisposeAsync().ConfigureAwait(false);
+            }
         }
     }
 }
