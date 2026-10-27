@@ -1,0 +1,4 @@
+{
+    "name": "CodeQL",
+    "description": "Analyze the C# code with CodeQL on every push and pull request, and weekly"
+}

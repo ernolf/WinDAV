@@ -9,6 +9,16 @@
     "sha": "0a5957bffde5b7b2e4d33f6dae5f75c982ee93e6",
     "source": "ncmake"
   },
+  "ci.yml": {
+    "hash": "a66904475a3cfb593a5f143a9d57639ebde88f15e402e3194d283f6540292a0e",
+    "sha": "b534d1dfc906ffe2fd7dcfe34a5b7f3380694fe3",
+    "source": "local"
+  },
+  "codeql.yml": {
+    "hash": "d295c049374d2eee24034c9ef8c1d95052ecb4ae9bbb403c7e8678b0eb084b6c",
+    "sha": "0984e72c04bf60cf466547c2f2ba3e19c2397d40",
+    "source": "local"
+  },
   "reuse.yml": {
     "hash": "7507fa539b8cdec70a5de786fbac4e38f1e53f9df404dbfc75bb2fe7950bc010",
     "sha": "67fdafc440e24937ece9f2f16d7f2c2df2c7efa5",

@@ -30,7 +30,9 @@ updates:
   # Without this the pinned action SHAs would never move, and a pin nobody updates is
   # a dependency frozen at the day it was written.
   - package-ecosystem: github-actions
-    directory: /
+    # The sources of the workflows, not the installed copies: ncmake installs from
+    # here, and a copy bumped in place would count as modified and stop updating.
+    directory: /.ncmake/workflows
     schedule:
       interval: weekly
     commit-message:
