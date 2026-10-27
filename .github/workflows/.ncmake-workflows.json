@@ -19,6 +19,11 @@
     "sha": "0984e72c04bf60cf466547c2f2ba3e19c2397d40",
     "source": "local"
   },
+  "lint-actions-security.yml": {
+    "hash": "946a1c4508050dcdcafce853b06352d3b3849860bb1970f9c192305c8046daf1",
+    "sha": "68d667016bbca1a53754fc86c678156f373519e4",
+    "source": "ncmake"
+  },
   "reuse.yml": {
     "hash": "7507fa539b8cdec70a5de786fbac4e38f1e53f9df404dbfc75bb2fe7950bc010",
     "sha": "67fdafc440e24937ece9f2f16d7f2c2df2c7efa5",
