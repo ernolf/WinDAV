@@ -8,7 +8,7 @@ SPDX-PackageDownloadLocation = "https://github.com/ernolf/WinDAV"
 # here are the ones whose syntax has none.
 
 [[annotations]]
-path = ["LICENSE", "global.json", "**/packages.lock.json"]
+path = ["LICENSE", "global.json", "**/packages.lock.json", ".ncmake/workflows/*.properties.json"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 [ernolf] Raphael Gradenwitz"
 SPDX-License-Identifier = "GPL-3.0-or-later"

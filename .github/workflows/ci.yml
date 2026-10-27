@@ -29,6 +29,7 @@ jobs:
         with:
           # MinVer reads the version off the tags, and a shallow clone carries none.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0

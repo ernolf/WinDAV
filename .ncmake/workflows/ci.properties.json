@@ -1,0 +1,4 @@
+{
+    "name": "CI",
+    "description": "Restore, build, test and check the formatting of WinDAV on every push and pull request"
+}
