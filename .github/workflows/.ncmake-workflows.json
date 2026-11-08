@@ -10,13 +10,13 @@
     "source": "ncmake"
   },
   "ci.yml": {
-    "hash": "a66904475a3cfb593a5f143a9d57639ebde88f15e402e3194d283f6540292a0e",
-    "sha": "b534d1dfc906ffe2fd7dcfe34a5b7f3380694fe3",
+    "hash": "c079305beff35cbd14a21ce151d7cb0eb4398434442495afc4b98418827111ad",
+    "sha": "159a02e80238f7180fa0a6b2c4b8291d24223fa1",
     "source": "local"
   },
   "codeql.yml": {
-    "hash": "d295c049374d2eee24034c9ef8c1d95052ecb4ae9bbb403c7e8678b0eb084b6c",
-    "sha": "0984e72c04bf60cf466547c2f2ba3e19c2397d40",
+    "hash": "315e109b24b15d409af4224c88e5a94956da06871f57bd80471e46f3684af899",
+    "sha": "1e6c2563a0df0ad299c132c40937eadcddee74ce",
     "source": "local"
   },
   "lint-actions-security.yml": {
